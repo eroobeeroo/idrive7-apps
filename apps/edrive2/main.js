@@ -319,20 +319,35 @@ mgu.run({
             clearTimeout(powerTimer);
             const s = shown() ? settings.get('powerPoll') : Math.max(BG_POWER_S, settings.get('powerPoll'));
             // 0.1 s: as fast as the battery unit answers (one read waits for the last)
-            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), Math.max(20, s * 1000 - (s <= 0.1 ? 1000 : 0)));
+            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), Math.max(60, s * 1000 - (s <= 0.1 ? 1000 : 0)));
         }
         schedulePower();
 
         /* ---------- slow reads (only while the screen is shown) ---------- */
         const SLOW = ['soc', 'cellV', 'cellT', 'coolant', 'limits'];
+        const slowFail = {}, slowLogT = {};
+        const SLOW_KEEP = 10 * 60000;      // a value that stops answering is kept (dimmed) this long, then blank
         async function readSlow() {
             if (!diag.available || !shown()) return;
             for (const name of SLOW) {
                 if (!(cfg.slow[name] || []).length) continue;
                 await exclusive(async () => {
                     try {
-                        const r = await readGroup(name, cfg.slow[name]);
-                        if (!r) return;
+                        let r = await readGroup(name, cfg.slow[name]);
+                        if (!r) {
+                            // busy or no reply (the battery unit is asked something ~10 times a second): once more
+                            await new Promise((res) => setTimeout(res, 150));
+                            r = await readGroup(name, cfg.slow[name]);
+                        }
+                        if (!r) {
+                            const c = cfg.slow[name][pick[name] || 0], raw = reader.raws[reader.key(primary(c))];
+                            slowFail[name] = (slowFail[name] || 0) + 1;
+                            if (Date.now() - (slowLogT[name] || 0) > 60000) {
+                                slowLogT[name] = Date.now();
+                                log.warn(name + ' (' + c.did + ') failed ' + slowFail[name] + 'x: ' + (raw ? raw.why + (raw.bytes ? ' [' + raw.bytes + ']' : '') : 'not read'));
+                            }
+                            return;
+                        }
                         const f = fieldsOf(cfg.slow[name][pick[name]]);
                         live[name] = f.length === 1 ? r[f[0]] : r;
                         live.slowT[name] = Date.now();
@@ -588,13 +603,15 @@ mgu.run({
         function data() {
             if (usingDemo()) return Object.assign(demo.sample(), { demo: true });
             const now = Date.now(), fresh = (t, s) => t && now - t < s * 1000;
-            const slowOk = (k) => fresh(live.slowT[k], Math.max(30, settings.get('slowPoll') * 4));
+            const slowOk = (k) => live.slowT[k] && now - live.slowT[k] < SLOW_KEEP;
+            const staleAfter = Math.max(30, settings.get('slowPoll') * 4) * 1000;
+            const stale = {}; SLOW.forEach((k) => { stale[k] = !!live.slowT[k] && now - live.slowT[k] > staleAfter ? now - live.slowT[k] : 0; });
             return {
                 demo: false, kw: fresh(live.kwT, Math.max(6, BG_POWER_S * 4)) ? live.kw : null,
                 v: fresh(live.vT, 60) ? live.v : fresh(live.lscVT, 60) ? live.lscV : null, a: fresh(live.kwT, 10) ? live.a : null,
                 speed: live.speed, engine: engineOn(), soc: slowOk('soc') ? live.soc : null,
                 cellV: slowOk('cellV') ? live.cellV : null, cellT: slowOk('cellT') ? live.cellT : null, carT: live.carT,
-                coolant: slowOk('coolant') ? live.coolant : null, limits: slowOk('limits') ? live.limits : null,
+                coolant: slowOk('coolant') ? live.coolant : null, limits: slowOk('limits') ? live.limits : null, stale,
                 ambient: live.ambient, climate: live.climate, blower: live.blower, blowerTop: live.blowerTop,
                 acKw: live.acKw, seats: live.seats, wheel: live.wheel,
             };
@@ -732,7 +749,7 @@ mgu.run({
 
             // ---- battery at a glance
             G.panel(cv, t, x, 330, w, 182, 'Battery');
-            const sw = cv.text(G.isNum(d.soc) ? G.fmt(d.soc, 0) : '--', x + 24, 452, 72, G.isNum(d.soc) ? t.text : t.dim, { font: 'num' });
+            const sw = cv.text(G.isNum(d.soc) ? G.fmt(d.soc, 0) : '--', x + 24, 452, 72, G.isNum(d.soc) && !(d.stale && d.stale.soc) ? t.text : t.dim, { font: 'num' });
             cv.text('%', x + 32 + sw, 452, 28, t.dim, { font: 'bold' });
             if (G.isNum(d.soc)) cv.text('~' + G.fmt(d.soc / 100 * settings.get('designKwh'), 1) + ' kWh', x + 24, 490, 20, t.dim);
             const ct = cellTemps(d);
@@ -821,7 +838,7 @@ mgu.run({
                 });
             } else cv.text('mean temperature over 30 min shows here', 404, 384, 20, t.dim, { align: 'center' });
             cv.text('COOLANT  ' + fmtT(d.coolant, 1) + '   ·   OUTSIDE  ' + fmtT(d.ambient, 0), 48, 480, 22, t.dim, { font: 'bold', spacing: 1 });
-            cv.text(ct ? ct.src : settings.get('diagPage') ? 'no reading - see Diagnostics' : 'no reading yet', 760, 480, 18, t.dim, { align: 'right' });
+            cv.text(ct ? ct.src + (d.stale && d.stale.cellT && ct.src.indexOf('battery unit') >= 0 ? ', read ' + Math.round(d.stale.cellT / 60000) + ' min ago' : '') : settings.get('diagPage') ? 'no reading - see Diagnostics' : 'no reading yet', 760, 480, 18, t.dim, { align: 'right' });
 
             // ---- cell voltages
             const x = 808, w = 768;
@@ -927,7 +944,7 @@ mgu.run({
             G.panel(cv, t, 24, 44, 1552, 468, 'Battery unit (UDS)');
             const link = diag.p ? (diag.available ? 'link up' : 'link down') : 'no link (' + (diag.error || 'not started') + ')';
             const rr = readRate();
-            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
+            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
             const cols = [48, 200, 290, 380, 900, 1290];
             ['VALUE', 'ECU', 'DID', 'REPLY', 'DECODED', 'STATUS'].forEach((h, i) => cv.text(h, cols[i], 156, 20, t.dim, { font: 'bold', spacing: 1 }));
             cv.fillRect(48, 168, 1504, 1, t.tick);
