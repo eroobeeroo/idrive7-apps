@@ -193,7 +193,7 @@ mgu.run({
         const reader = new DidReader(diag, { ecu: cfg.ecu });
         const pick = {};
         const fieldsOf = (c) => (c.array ? ['min', 'max', 'avg'] : Object.keys(c.fields || {}));
-        const primary = (c) => Object.assign({ ecu: c.ecu, did: c.did }, c.array || c.fields[fieldsOf(c)[0]]);
+        const primary = (c) => Object.assign({ ecu: c.ecu, did: c.did, timeoutMs: c.timeoutMs }, c.array || c.fields[fieldsOf(c)[0]]);
         /** One candidate: { field: value } (a field outside its min..max is null), or null when it doesn't answer. */
         async function readFields(c) {
             const p = primary(c), v0 = await reader.read(p);
@@ -269,7 +269,8 @@ mgu.run({
         const trip = { out: 0, regen: 0, charged: 0, climate: 0, peakOut: 0, peakIn: 0, since: Date.now() };
         const trace = [], climTrace = [], tempTrace = [];
         const push = (arr, keep, v) => { const now = Date.now(); arr.push([now, v]); while (arr.length && now - arr[0][0] > keep * 1000) arr.shift(); };
-        let iFail = 0, iTry = 0, vTick = 0;
+        let iFail = 0, iTry = 0, vTick = 0, iOk = false, pMiss = 0, pLogT = 0;
+        const KW_KEEP = 15000;           // a missed power read: the last value stays (dimmed) this long
         function onPower(kw, now) {
             if (live.kwT && G.isNum(live.kw)) {
                 const h = Math.min(now - live.kwT, 3 * Math.max(BG_POWER_S, settings.get('powerPoll')) * 1000) / 3600000;
@@ -290,7 +291,8 @@ mgu.run({
             learnBaseline(kw, now);
         }
         async function readPower() {
-            if (!diag.available || (iFail >= 3 && Date.now() - iTry < 30000)) return;
+            // a car without the current identifier: only every 30 s. One that has answered keeps being asked
+            if (!diag.available || (!iOk && iFail >= 3 && Date.now() - iTry < 30000)) return;
             await exclusive(async () => {
                 try {
                     // the pack voltage moves little: every 5 s is enough, so the current gets nearly every read
@@ -302,8 +304,13 @@ mgu.run({
                     const r = await readGroup('hvI', cfg.fast.hvI);
                     rate.push([iTry, Date.now() - iTry]);
                     while (rate.length && iTry - rate[0][0] > 10000) rate.shift();
-                    if (!r) { iFail++; return; }
-                    iFail = 0;
+                    if (!r) {
+                        iFail++; pMiss++;
+                        const c = cfg.fast.hvI[pick.hvI || 0], raw = reader.raws[reader.key(primary(c))];
+                        if (Date.now() - pLogT > 30000) { pLogT = Date.now(); log.warn('power (' + c.did + ') missed ' + pMiss + 'x: ' + (raw ? raw.why : 'not read') + (G.isNum(live.speed) ? ' at ' + Math.round(live.speed) + ' km/h' : '')); }
+                        return;
+                    }
+                    iFail = 0; iOk = true;
                     const a = r[fieldsOf(cfg.fast.hvI[pick.hvI])[0]], now = Date.now();
                     live.a = a;
                     const volts = live.vT && now - live.vT < 60000 ? live.v : live.lscVT && now - live.lscVT < 60000 ? live.lscV : null;
@@ -607,7 +614,7 @@ mgu.run({
             const staleAfter = Math.max(30, settings.get('slowPoll') * 4) * 1000;
             const stale = {}; SLOW.forEach((k) => { stale[k] = !!live.slowT[k] && now - live.slowT[k] > staleAfter ? now - live.slowT[k] : 0; });
             return {
-                demo: false, kw: fresh(live.kwT, Math.max(6, BG_POWER_S * 4)) ? live.kw : null,
+                demo: false, kw: live.kwT && now - live.kwT < KW_KEEP ? live.kw : null, kwAge: live.kwT ? now - live.kwT : null,
                 v: fresh(live.vT, 60) ? live.v : fresh(live.lscVT, 60) ? live.lscV : null, a: fresh(live.kwT, 10) ? live.a : null,
                 speed: live.speed, engine: engineOn(), soc: slowOk('soc') ? live.soc : null,
                 cellV: slowOk('cellV') ? live.cellV : null, cellT: slowOk('cellT') ? live.cellT : null, carT: live.carT,
@@ -641,7 +648,9 @@ mgu.run({
             const v = G.hold('edrive2.kw', d.kw, 150), a = Math.abs(v);
             const moving = G.isNum(d.speed) && d.speed > 1;
             const what = v > IDLE_KW ? (moving ? 'DRIVING' : 'DRAWING') : v < -IDLE_KW ? (moving ? 'REGEN' : 'CHARGING') : 'IDLE';
-            return { kw: v, text: (v < -IDLE_KW ? '-' : '') + G.fmt(a, a < 10 ? 1 : 0), col: v < -IDLE_KW ? GO : a >= 60 ? t.warn : t.text, what };
+            // older than a couple of reads: the last value, dimmed, until a new one arrives
+            const old = !d.demo && G.isNum(d.kwAge) && d.kwAge > 1500;
+            return { kw: v, text: (v < -IDLE_KW ? '-' : '') + G.fmt(a, a < 10 ? 1 : 0), col: old ? t.dim : v < -IDLE_KW ? GO : a >= 60 ? t.warn : t.text, what, old };
         }
 
         /* ---------- pages ---------- */
@@ -944,7 +953,7 @@ mgu.run({
             G.panel(cv, t, 24, 44, 1552, 468, 'Battery unit (UDS)');
             const link = diag.p ? (diag.available ? 'link up' : 'link down') : 'no link (' + (diag.error || 'not started') + ')';
             const rr = readRate();
-            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
+            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (pMiss ? '  ·  power missed ' + pMiss : '') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
             const cols = [48, 200, 290, 380, 900, 1290];
             ['VALUE', 'ECU', 'DID', 'REPLY', 'DECODED', 'STATUS'].forEach((h, i) => cv.text(h, cols[i], 156, 20, t.dim, { font: 'bold', spacing: 1 }));
             cv.fillRect(48, 168, 1504, 1, t.tick);
