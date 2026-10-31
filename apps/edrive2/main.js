@@ -110,7 +110,7 @@ mgu.run({
         const one = (v, key) => { const e = entries(v, key)[0]; return e ? e[key] : undefined; };
 
         /* ---------- car signals (SOME/IP) ---------- */
-        const watch = (iface, handlers, what, opts) => ctx.signals.watch(iface, '1', handlers, log, opts)
+        const watch = (iface, handlers, what, opts) => ctx.signals.watch(iface, '1', handlers, log, opts && Object.assign({ active: () => inUse() }, opts))
             .then((s) => log.info(what + ' ' + (s.error ? 'error: ' + s.error : 'subscribed')));
         watch('de.bmw.infrastructure.EnvironmentalInformation', {
             ExteriorTemperature: (v) => { const a = sc('ambient', v.temperatureExterior); if (a !== null) live.ambient = a; },
@@ -119,12 +119,12 @@ mgu.run({
             statusCarSpeed2: (v) => {
                 const k = v.speedVehicleCentreOfGravity;
                 live.speed = k === 65535 || k == null ? null : k * 0.015625;
-                if (G.isNum(live.speed) && live.speed > 1) live.standSince = 0;
+                if (G.isNum(live.speed) && live.speed > 1) { live.standSince = 0; if (!driving()) log.info('in use again (moving)'); lastActiveT = Date.now(); }
                 else if (G.isNum(live.speed) && !live.standSince) live.standSince = Date.now();
             },
         }, 'speed');
         watch('de.bmw.infotainment.vehicle.CDS', {
-            statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); } },
+            statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); if (r > 400) lastActiveT = Date.now(); } },
         }, 'rpm');
         // climate on / A/C per zone (on when any zone is on)
         const zones = { climate: {}, ac: {} };
@@ -262,7 +262,17 @@ mgu.run({
         });
         let lastDrawT = 0;
         // the app's screen, or its home-screen widget: either one gets the fast power reads
-        const shown = () => Date.now() - lastDrawT < SHOWN_MS || !!(ctx.widget && ctx.widget.active());
+        /* ---------- talking to the car only while it is in use ----------
+         * Every diagnostic request goes through the car's gateway and keeps the car awake. So the app asks
+         * only while the car is driven (moving or engine on, and 3 min after) or for 10 min after eDrive Live
+         * was opened or a button pressed while parked. Parked longer (charging, screen left on): it stops,
+         * says so, and the car can sleep. The home-screen widget counts only while driving. */
+        const IDLE_AFTER_MOVE = 3 * 60000, IDLE_AFTER_USER = 10 * 60000;
+        let lastUserT = Date.now(), lastActiveT = 0;
+        const driving = () => Date.now() - lastActiveT < IDLE_AFTER_MOVE;
+        const inUse = () => driving() || Date.now() - lastUserT < IDLE_AFTER_USER;
+        const touched = () => { const was = inUse(); lastUserT = Date.now(); if (!was) { log.info('in use again (user)'); schedulePower(); readSlow(); } };
+        const shown = () => inUse() && (Date.now() - lastDrawT < SHOWN_MS || (!!(ctx.widget && ctx.widget.active()) && driving()));
         const engineOn = () => G.isNum(live.rpm) && live.rpm > 400 && Date.now() - live.rpmT < 5000;
 
         /* ---------- power: fast reads, drive totals, traces ---------- */
@@ -292,7 +302,7 @@ mgu.run({
         }
         async function readPower() {
             // a car without the current identifier: only every 30 s. One that has answered keeps being asked
-            if (!diag.available || (!iOk && iFail >= 3 && Date.now() - iTry < 30000)) return;
+            if (!diag.available || !inUse() || (!iOk && iFail >= 3 && Date.now() - iTry < 30000)) return;
             await exclusive(async () => {
                 try {
                     // the pack voltage moves little: every 5 s is enough, so the current gets nearly every read
@@ -440,7 +450,7 @@ mgu.run({
         loadScan();
         settings.onChange((k) => { if (k === 'scanUnit') loadScan(); });
         async function runScan() {
-            if (scan.running || !diag.available) return;
+            if (scan.running || !diag.available || !inUse()) return;
             const u = scanUnit(), unit = SCAN_UNITS[u];
             loadScan();
             if (scan.t) { try { fs.writeFileSync(scanFile(u, true), JSON.stringify({ hits: scan.hits, done: scan.done, t: scan.t, noReply: scan.noReply })); } catch (e) { /* ok */ } }
@@ -478,7 +488,7 @@ mgu.run({
         const cmpState = { unit: 0, base: null, now: {}, flips: {}, t: 0, busy: false, cycles: 0 };
         function rebase() { Object.assign(cmpState, { unit: scan.unit, base: null, now: {}, flips: {}, t: Date.now(), cycles: 0 }); }
         async function watchCycle() {
-            if (cmpState.busy || scan.running || !scan.t || !scan.hits.length || !diag.available || pages()[page] !== 'scan') return;
+            if (!inUse() || cmpState.busy || scan.running || !scan.t || !scan.hits.length || !diag.available || pages()[page] !== 'scan') return;
             if (cmpState.unit !== scan.unit) rebase();
             cmpState.busy = true;
             const now = {};
@@ -641,6 +651,7 @@ mgu.run({
 
         /** Power for display: { text, col, what }; held 0.25 s so it doesn't flicker at 60 fps. */
         function power(d, t) {
+            if (!d.demo && !inUse()) return { kw: null, text: '--', col: t.dim, what: 'PAUSED - PARKED, CAR CAN SLEEP' };
             if (!G.isNum(d.kw)) {
                 const why = d.demo ? 'DEMO' : !diag.available ? 'NO DIAGNOSTIC LINK' : iFail >= 3 ? (settings.get('diagPage') ? 'NO REPLY - SEE DIAGNOSTICS' : 'NO REPLY') : 'READING';
                 return { kw: null, text: '--', col: t.dim, what: why };
@@ -657,9 +668,10 @@ mgu.run({
         const pages = () => ['power', 'battery', 'cells', 'climate'].concat(settings.get('diagPage') ? ['diag', 'scan', 'signals'] : []);
         const NAMES = { power: 'Power', battery: 'Battery', cells: 'Cells', climate: 'Climate', diag: 'Diagnostics', scan: 'Scan', signals: 'Signals' };
         let page = 0;
-        ui.onClick('BTN_PAGE', () => { page = (page + 1) % pages().length; return render(); });
-        ui.onClick('BTN_PREV', () => { const n = pages().length; page = (page + n - 1) % n; return render(); });
+        ui.onClick('BTN_PAGE', () => { touched(); page = (page + 1) % pages().length; return render(); });
+        ui.onClick('BTN_PREV', () => { touched(); const n = pages().length; page = (page + n - 1) % n; return render(); });
         ui.onClick('BTN_RESET', () => {
+            touched();
             if (pages()[page] === 'scan') {
                 // a scan from the last week: Reset = new baseline for the live comparison; else scan again
                 if (scan.t && !scan.running && Date.now() - scan.t < 7 * 86400000 && scan.hits.length) rebase();
@@ -1038,6 +1050,7 @@ mgu.run({
         }
 
         function render() {
+            if (Date.now() - lastDrawT > 5000) touched();          // the screen was just opened
             lastDrawT = Date.now();
             const t = ctx.theme(), d = data();
             const cv = ctx.canvas(W, H).clear(t.bg);
