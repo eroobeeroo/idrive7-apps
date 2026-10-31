@@ -69,7 +69,9 @@ class Diag extends EventEmitter {
      * Send one request; resolves with the transport's verdict ('NO_ERROR', 'REQUEST_PENDING', ...).
      * The transport turns requests away while it is still busy with an earlier one (e.g. a second
      * functional request a few seconds after the first: APP_REQUEST_TEMPORARILY_NOT_ACCEPTED), so
-     * such a verdict is retried a few times with a growing pause (1, 2, 3, 4 s).
+     * such a verdict is retried a few times with a growing pause (1, 2, 3, 4 s; busyPauseMs sets the step).
+     * An app that polls can shorten the waits: busyPauseMs, pendingMs ("response pending", 10 s),
+     * callTimeoutMs (the transport call, 8 s).
      */
     async send(target, sid, data) {
         if (!this.p) throw new Error(this.error || 'no diagnostic link');
@@ -79,12 +81,12 @@ class Diag extends EventEmitter {
             const r = await this.signals.call(this.p, 'sendTasuRequest', {
                 sourceAddress: TESTER, targetAddress: target, serviceID: sid, subroutineID: 0,
                 udsDataLength: d.length, udsData: Buffer.from(d), deadlockTime: 0,
-            }, 8000);
+            }, this.callTimeoutMs || 8000);
             const v = r && typeof r === 'object' ? (r.TasuErrorEnum || Object.keys(r).map((k) => r[k]).find((x) => typeof x === 'string')) : r;
             const verdict = v === undefined ? 'NO_ERROR' : String(v);
             if (!/TEMPORARILY_NOT_ACCEPTED|BUSY/i.test(verdict) || attempt >= 4) return verdict;
             this.log.info('transport busy (' + verdict + '), retrying');
-            await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+            await new Promise((res) => setTimeout(res, (this.busyPauseMs || 1000) * (attempt + 1)));
         }
     }
 
@@ -130,7 +132,7 @@ class Diag extends EventEmitter {
             finish = (v) => { clearTimeout(t); this.removeListener('frame', onFrame); resolve(v); };
             onFrame = (f) => {
                 if (f.ecu !== target) return;
-                if (f.uds[0] === 0x7F && f.uds[2] === 0x78) { clearTimeout(t); t = setTimeout(() => finish(null), 10000); return; }
+                if (f.uds[0] === 0x7F && f.uds[2] === 0x78) { clearTimeout(t); t = setTimeout(() => finish(null), this.pendingMs || 10000); return; }
                 if (accept && !accept(f.uds)) return;
                 finish(f.uds);
             };

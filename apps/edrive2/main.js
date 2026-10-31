@@ -189,11 +189,14 @@ mgu.run({
         /* ---------- UDS: candidates with several fields on one reply ---------- */
         const diag = new Diag(ctx.signals, log);
         diag.quiet = true;
+        // short waits: one request that hangs holds up every other one behind it (the power read too).
+        // The kit's defaults (busy: 1-4 s pauses, "pending": 10 s, transport call: 8 s) are for one-off reads.
+        diag.busyPauseMs = 150; diag.pendingMs = 1500; diag.callTimeoutMs = 2000;
         diag.init();
         const reader = new DidReader(diag, { ecu: cfg.ecu });
         const pick = {};
         const fieldsOf = (c) => (c.array ? ['min', 'max', 'avg'] : Object.keys(c.fields || {}));
-        const primary = (c) => Object.assign({ ecu: c.ecu, did: c.did, timeoutMs: c.timeoutMs }, c.array || c.fields[fieldsOf(c)[0]]);
+        const primary = (c) => Object.assign({ ecu: c.ecu, did: c.did, timeoutMs: c.timeoutMs || (c.array ? 2000 : 1000) }, c.array || c.fields[fieldsOf(c)[0]]);
         /** One candidate: { field: value } (a field outside its min..max is null), or null when it doesn't answer. */
         async function readFields(c) {
             const p = primary(c), v0 = await reader.read(p);
@@ -250,13 +253,18 @@ mgu.run({
             if (pumping) return;
             pumping = true;
             while (queue.length) {
-                const j = queue.shift();
+                const j = queue.shift(), t0 = Date.now();
+                busyWith = j.label; busySince = t0;
                 try { j.res(await j.fn()); } catch (e) { j.rej(e); }
+                const ms = Date.now() - t0;
+                busyWith = null;
+                if (ms > 1500) { stalls++; log.warn('link held ' + ms + ' ms by ' + j.label + (queue.length ? ' (' + queue.length + ' waiting)' : '')); }
             }
             pumping = false;
         }
-        const exclusive = (fn, urgent) => new Promise((res, rej) => {
-            const j = { fn, res, rej };
+        let busyWith = null, busySince = 0, stalls = 0;
+        const exclusive = (fn, urgent, label) => new Promise((res, rej) => {
+            const j = { fn, res, rej, label: label || (urgent ? 'power' : '?') };
             if (urgent) queue.unshift(j); else queue.push(j);
             pump();
         });
@@ -282,6 +290,8 @@ mgu.run({
         let iFail = 0, iTry = 0, vTick = 0, iOk = false, pMiss = 0, pLogT = 0;
         const KW_KEEP = 15000;           // a missed power read: the last value stays (dimmed) this long
         function onPower(kw, now) {
+            // a gap in the power readings while in use: say what held the link
+            if (live.kwT && now - live.kwT > 3000 && inUse() && shown()) log.warn('power gap ' + (now - live.kwT) + ' ms' + (pMiss ? ', ' + pMiss + ' missed so far' : '') + ', stalls ' + stalls);
             if (live.kwT && G.isNum(live.kw)) {
                 const h = Math.min(now - live.kwT, 3 * Math.max(BG_POWER_S, settings.get('powerPoll')) * 1000) / 3600000;
                 const moving = G.isNum(live.speed) && live.speed > 1;
@@ -326,7 +336,7 @@ mgu.run({
                     const volts = live.vT && now - live.vT < 60000 ? live.v : live.lscVT && now - live.lscVT < 60000 ? live.lscV : null;
                     if (G.isNum(volts) && G.isNum(a)) onPower(volts * a / 1000 * (cfg.powerSign < 0 ? -1 : 1), now);
                 } catch (e) { log.warn('power: ' + e); }
-            }, true);
+            }, true, 'power');
         }
         /** Power reads in the last 10 s: [time, ms it took]. */
         const rate = [];
@@ -342,34 +352,31 @@ mgu.run({
 
         /* ---------- slow reads (only while the screen is shown) ---------- */
         const SLOW = ['soc', 'cellV', 'cellT', 'coolant', 'limits'];
-        const slowFail = {}, slowLogT = {};
+        const slowFail = {}, slowLogT = {}, slowMiss = {}, slowSkipUntil = {};
         const SLOW_KEEP = 10 * 60000;      // a value that stops answering is kept (dimmed) this long, then blank
         async function readSlow() {
             if (!diag.available || !shown()) return;
             for (const name of SLOW) {
-                if (!(cfg.slow[name] || []).length) continue;
-                await exclusive(async () => {
-                    try {
-                        let r = await readGroup(name, cfg.slow[name]);
-                        if (!r) {
-                            // busy or no reply (the battery unit is asked something ~10 times a second): once more
-                            await new Promise((res) => setTimeout(res, 150));
-                            r = await readGroup(name, cfg.slow[name]);
-                        }
-                        if (!r) {
-                            const c = cfg.slow[name][pick[name] || 0], raw = reader.raws[reader.key(primary(c))];
-                            slowFail[name] = (slowFail[name] || 0) + 1;
-                            if (Date.now() - (slowLogT[name] || 0) > 60000) {
-                                slowLogT[name] = Date.now();
-                                log.warn(name + ' (' + c.did + ') failed ' + slowFail[name] + 'x: ' + (raw ? raw.why + (raw.bytes ? ' [' + raw.bytes + ']' : '') : 'not read'));
-                            }
-                            return;
-                        }
-                        const f = fieldsOf(cfg.slow[name][pick[name]]);
-                        live[name] = f.length === 1 ? r[f[0]] : r;
-                        live.slowT[name] = Date.now();
-                    } catch (e) { log.warn(name + ': ' + e); }
-                });
+                if (!(cfg.slow[name] || []).length || Date.now() < (slowSkipUntil[name] || 0)) continue;
+                // each try is its own turn on the link, so a power read can go between them
+                const one = () => exclusive(() => readGroup(name, cfg.slow[name]).catch((e) => { log.warn(name + ': ' + e); return null; }), false, name);
+                let r = await one();
+                if (!r) { await new Promise((res) => setTimeout(res, 150)); r = await one(); }        // busy or no reply: once more
+                if (!r) {
+                    const c = cfg.slow[name][pick[name] || 0], raw = reader.raws[reader.key(primary(c))];
+                    slowFail[name] = (slowFail[name] || 0) + 1;
+                    if (Date.now() - (slowLogT[name] || 0) > 60000) {
+                        slowLogT[name] = Date.now();
+                        log.warn(name + ' (' + c.did + ') failed ' + slowFail[name] + 'x: ' + (raw ? raw.why + (raw.bytes ? ' [' + raw.bytes + ']' : '') : 'not read'));
+                    }
+                    // three rounds in a row without an answer: leave it alone for a minute
+                    if ((slowMiss[name] = (slowMiss[name] || 0) + 1) >= 3) { slowSkipUntil[name] = Date.now() + 60000; slowMiss[name] = 0; log.warn(name + ': no answer 3 rounds, paused 60 s'); }
+                    continue;
+                }
+                slowMiss[name] = 0;
+                const f = fieldsOf(cfg.slow[name][pick[name]]);
+                live[name] = f.length === 1 ? r[f[0]] : r;
+                live.slowT[name] = Date.now();
             }
             await readProbes();
         }
@@ -381,18 +388,24 @@ mgu.run({
          * give the scale, after which "factor" in app.json turns them into kW. */
         const PROBES = (ctx.spec.config && ctx.spec.config.probes) || [];
         const probe = {};                                   // name -> { raw, t }
+        const probeMiss = {}, probeSkipUntil = {};
         const PROBE_FILE = path.join(ctx.dataDir, 'probes.json');
         let samples = [];
         try { samples = JSON.parse(fs.readFileSync(PROBE_FILE, 'utf8')) || []; } catch (e) { /* none yet */ }
         async function readProbes() {
             if (!PROBES.length) return;
             for (const pr of PROBES) {
+                if (Date.now() < (probeSkipUntil[pr.name] || 0)) continue;
                 await exclusive(async () => {
                     try {
-                        const v = await reader.read({ ecu: pr.ecu, did: pr.did, at: pr.at || 0, bytes: pr.bytes || 1 });
-                        if (v !== null) probe[pr.name] = { raw: v, t: Date.now() };
+                        const v = await reader.read({ ecu: pr.ecu, did: pr.did, at: pr.at || 0, bytes: pr.bytes || 1, timeoutMs: 800 });
+                        if (v !== null) { probe[pr.name] = { raw: v, t: Date.now() }; probeMiss[pr.name] = 0; }
+                        else if ((probeMiss[pr.name] = (probeMiss[pr.name] || 0) + 1) >= 3) {
+                            probeSkipUntil[pr.name] = Date.now() + 60000; probeMiss[pr.name] = 0;
+                            log.warn('climate unit ' + pr.did + ': no answer 3 rounds, paused 60 s');
+                        }
                     } catch (e) { /* not this time */ }
-                });
+                }, false, 'climate ' + pr.name);
             }
             const d = data(), cp = climatePower(d, Date.now());
             if (!d.demo && cp.how === 'measured' && PROBES.some((pr) => probe[pr.name] && Date.now() - probe[pr.name].t < 15000)) {
@@ -965,7 +978,7 @@ mgu.run({
             G.panel(cv, t, 24, 44, 1552, 468, 'Battery unit (UDS)');
             const link = diag.p ? (diag.available ? 'link up' : 'link down') : 'no link (' + (diag.error || 'not started') + ')';
             const rr = readRate();
-            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (pMiss ? '  ·  power missed ' + pMiss : '') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
+            cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (pMiss ? '  ·  power missed ' + pMiss : '') + (stalls ? '  ·  stalls ' + stalls : '') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
             const cols = [48, 200, 290, 380, 900, 1290];
             ['VALUE', 'ECU', 'DID', 'REPLY', 'DECODED', 'STATUS'].forEach((h, i) => cv.text(h, cols[i], 156, 20, t.dim, { font: 'bold', spacing: 1 }));
             cv.fillRect(48, 168, 1504, 1, t.tick);
