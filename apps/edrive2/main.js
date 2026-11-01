@@ -126,14 +126,26 @@ mgu.run({
                 else if (G.isNum(live.speed) && !live.standSince) live.standSince = Date.now();
             },
         }, 'speed');
-        // the turn signals, for the arrows on the HUD (overlay.js): ControlIndicateDirection
-        // 1 / 3 tap / steady left, 2 / 4 right, 8 both (hazards), 0 off
+        // the turn signals, for the arrows on the HUD (overlay.js). Either field may be the one the car fills, so both
+        // are watched (raw values on the Car signals page). controlIndicateDirection: 1 / 3 tap / steady left, 2 / 4
+        // right, 8 both (hazards), 0 off; else activeFunctionIndicateDirection: the function blinking (7 / 9 / 18 / 20
+        // / 22 left, 8 / 10 / 19 / 21 / 23 right, hazards and alarms both, 0 off)
         live.indicator = 'off';
+        const ACTIVE_LEFT = [7, 9, 18, 20, 22], ACTIVE_RIGHT = [8, 10, 19, 21, 23], ACTIVE_BOTH = [1, 5, 6, 11, 12, 13, 16, 17, 24, 25];
+        const onIndicators = (what) => (v) => {
+            rawSeen(what, v);
+            const c = v && (v.controlIndicateDirection !== undefined ? v.controlIndicateDirection : one(v, 'controlIndicateDirection'));
+            const a = v && (v.activeFunctionIndicateDirection !== undefined ? v.activeFunctionIndicateDirection : one(v, 'activeFunctionIndicateDirection'));
+            let dir = null;
+            if (c === 1 || c === 3) dir = 'left'; else if (c === 2 || c === 4) dir = 'right'; else if (c === 8) dir = 'both'; else if (c === 0) dir = 'off';
+            if (dir === null || (dir === 'off' && G.isNum(a) && a > 0 && a < 250)) {
+                dir = ACTIVE_LEFT.indexOf(a) >= 0 ? 'left' : ACTIVE_RIGHT.indexOf(a) >= 0 ? 'right' : ACTIVE_BOTH.indexOf(a) >= 0 ? 'both' : a === 0 ? 'off' : dir;
+            }
+            if (dir) { if (dir !== live.indicator) log.info('turn signals: ' + dir + ' (' + what + ' ' + c + ' / ' + a + ')'); live.indicator = dir; live.indicatorT = Date.now(); }
+        };
         watch('de.bmw.body.Light', {
-            StatusFunctionsIndicators: (v) => {
-                const c = v && (v.controlIndicateDirection !== undefined ? v.controlIndicateDirection : one(v, 'controlIndicateDirection'));
-                live.indicator = c === 1 || c === 3 ? 'left' : c === 2 || c === 4 ? 'right' : c === 8 ? 'both' : 'off';
-            },
+            StatusFunctionsIndicators: onIndicators('indicators'),
+            StatusFunctionsIndicators2: onIndicators('indicators 2'),
         }, 'turn signals');
         watch('de.bmw.infotainment.vehicle.CDS', {
             statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); if (r > 400) lastActiveT = Date.now(); } },

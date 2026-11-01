@@ -30,6 +30,11 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
+check('HUD, both extras at 85 %: moved left to end by x 700 (what the HUD shows), clear of the speed', () => {
+    const b = badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2);
+    assert(b.x + b.w <= 700 && b.x >= 345, JSON.stringify(b));
+    assert.strictEqual(badgeRect(mapRect('hud', 85), 'bottom', 'hud', 0).x, 420);
+});
 check('HUD widest: 85 % (680x300), 100 % is held to it', () => { assert.deepStrictEqual(mapRect('hud', 85), mapRect('hud', 100)); assert.strictEqual(mapRect('hud', 85).w, 680); });
 check('unknown target: none', () => assert.strictEqual(mapRect('nope', 0), null));
 check('badge inside the map, bottom and top', () => {
@@ -38,7 +43,7 @@ check('badge inside the map, bottom and top', () => {
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 402, y: 348, w: 284, h: 84 });   // larger, a tenth of the map up from its edge, as wide as its content
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 422, y: 402, w: 244, h: 72 });   // 1.3x, at the map's bottom edge (below the car's arrow), as wide as its content
     assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 293, w: 136, h: 40 });   // the HUD's size, right of its speed readout
 });
 
@@ -106,7 +111,7 @@ class FakeCR extends EventEmitter {
         assert(cr && cr.app === 'edrive');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [402, 348, 284, 84]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [422, 402, 244, 72]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });

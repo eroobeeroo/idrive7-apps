@@ -28,6 +28,8 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
+const HUD_VISIBLE_RIGHT = 700;   // the HUD shows no further right than this (OIL was cut off at x 730, G05)
+const HUD_SPEED_CLEAR = 345;     // the speed readout's right edge, measured from a photo (x ~332)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
@@ -78,18 +80,24 @@ function layout(h) {
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
 function badgeRect(r, where, target, extras) {
-    // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel;
+    // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (battery or oil temperature) adds EXTRA_W of the base width
-    const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.5;
+    const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.3;
     const h = Math.round(56 * s / 2) * 2;
     const w = Math.min(Math.ceil(layout(h).w * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3);
     // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
-    const m = target === 'hud' ? Math.round(10 * s) : Math.round(r.h * 0.1);
+    // (cluster: at the bottom edge, below the car's arrow in the middle of the map, which it covered higher up)
+    const m = target === 'hud' ? Math.round(10 * s) : 6;
     const y = where === 'top' ? r.y + m : r.y + r.h - h - m;
     let x = r.x + Math.floor((r.w - w) / 2);
-    if (target === 'hud' && where !== 'top') x = Math.min(Math.max(x, HUD_SPEED_RIGHT), r.x + r.w - w);
+    if (target === 'hud' && where !== 'top') {
+        // right of the speed readout, but never past what the HUD shows: a wider meter (extra values) moves left
+        // as far as it must, down to HUD_SPEED_CLEAR
+        x = Math.max(x, HUD_SPEED_RIGHT);
+        x = Math.max(Math.min(x, Math.min(r.x + r.w, HUD_VISIBLE_RIGHT) - w), Math.min(HUD_SPEED_CLEAR, x));
+    }
     return { x, y, w, h };
 }
 
