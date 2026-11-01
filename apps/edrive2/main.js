@@ -1215,6 +1215,7 @@ mgu.run({
                 gaugeKw: () => settings.get('gaugeKw'),
                 battery: () => { const ct = cellTemps(data()); return ct && G.isNum(ct.avg) ? ct.avg : null; },
                 oil: () => (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? live.oil : null),
+                soc: () => { const d = data(); return d.demo ? null : (G.isNum(d.soc) ? d.soc : null); },
                 keepFast() {
                     const was = shown(), wasInUse = inUse();
                     fastUntil = Date.now() + SHOWN_MS;

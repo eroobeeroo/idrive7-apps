@@ -72,23 +72,25 @@ function mapRect(target, hudPct) {
 const measure = new Canvas(1, 1);
 /** An extra value's column width for a panel h high. */
 const colW = (h) => Math.round(h * EXTRA_COL);
-function layout(h) {
+function layout(h, bar) {
+    if (bar === undefined) bar = true;
     const pad = Math.round(h * 0.2), gap = Math.round(h * 0.1);
     const numW = Math.ceil(measure.textWidth('-188', Math.round(h * 0.54), { font: 'bold', literal: true }));
     const unitW = Math.ceil(measure.textWidth('kW', Math.round(h * 0.25), { font: 'bold', literal: true }));
     const numR = pad + numW, unitX = numR + Math.round(h * 0.05), bx = unitX + unitW + gap, bw = Math.round(h * 1.05);
-    return { w: bx + bw + pad, pad, numR, unitX, bx, bw };
+    // (without the bar: the kW and its unit only)
+    return { w: bar ? bx + bw + pad : unitX + unitW + pad, pad, numR, unitX, bx, bw };
 }
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
 function badgeRect(r, where, target, extras, hasPower) {
-    if (hasPower === undefined) hasPower = true;
+    if (hasPower === undefined) hasPower = true;      // true: the kW and its bar, 'number': the kW alone, false: neither
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (a temperature) adds a column EXTRA_COL times the height wide
     let s = target === 'hud' ? Math.max(0.62, Math.min(HUD_MAX_H / 56, r.w / 400)) : 1.3;   // (HUD: up to HUD_MAX_H high)
     const size = (sc) => {
         const hh = Math.round(56 * sc / 2) * 2;
-        const L = layout(hh), ww = (hasPower ? L.w : L.pad) + (extras || 0) * colW(hh) + (hasPower ? 0 : L.pad);
+        const L = layout(hh, hasPower !== 'number'), ww = (hasPower ? L.w : L.pad) + (extras || 0) * colW(hh) + (hasPower ? 0 : L.pad);
         return [hh, Math.min(Math.ceil(ww / 4) * 4, r.w & ~3)];
     };
     let [h, w] = size(s);
@@ -124,7 +126,8 @@ function badgeRect(r, where, target, extras, hasPower) {
  */
 function drawBadge(cv, t, pw, outMax, inMax, extras) {
     extras = extras || [];
-    const W = cv.w, h = cv.h, L = layout(h), w = pw ? Math.max(0, W - extras.length * colW(h)) : 0;
+    const bar = !!pw && pw.bar !== false;
+    const W = cv.w, h = cv.h, L = layout(h, bar), w = pw ? Math.max(0, W - extras.length * colW(h)) : 0;
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
     const cw = extras.length ? (W - w) / extras.length : 0;
@@ -138,6 +141,7 @@ function drawBadge(cv, t, pw, outMax, inMax, extras) {
     const base = Math.round(h * 0.69);
     cv.text(pw.text, L.numR, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
     cv.text('kW', L.unitX, base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
+    if (!bar) return;
     const bx = L.bx, bw = Math.max(L.bw, w - L.bx - L.pad), bh = Math.max(6, Math.round(h * 0.2)), by = Math.round((h - bh) / 2);
     const span = outMax + inMax, x0 = bx + bw * inMax / span;
     const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
@@ -295,7 +299,12 @@ function startOverlay(ctx, lv, opts) {
         const t = ctx.theme(), p = lv.power ? lv.power(t) : null, pw = p && G.isNum(p.kw) ? p : null;
         const extras = lv.extras ? (lv.extras(t) || []).filter((e) => e && e.text !== '--') : [];
         if (!pw && !extras.length) return hide();          // nothing to show (parked, asleep, no provider)
-        if (!layer(extras.length, !!pw)) return undefined;
+        // the bar after the kW (setting power): 'on' everywhere, 'hudNumber' on the cluster only, 'number' nowhere
+        if (pw) {
+            const pwr = settings.get('power'), tg = place().target;
+            pw.bar = pwr === 'on' || (pwr === 'hudNumber' && tg !== 'hud') || (pwr === undefined);
+        }
+        if (!layer(extras.length, pw ? (pw.bar ? true : 'number') : false)) return undefined;
         const op = place().target === 'hud' ? hudOpacity() : 1;
         if (op !== opacity) { opacity = op; cr.set(ref, { opacity }); }
         const tm = now();

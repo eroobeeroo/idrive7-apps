@@ -27,6 +27,7 @@ const VALUES = {
     battery: { label: 'BATT', what: 'battery temperature' },
     oil: { label: 'OIL', what: 'engine oil temperature' },
     coolant: { label: 'COOL', what: 'coolant temperature' },
+    soc: { label: 'SOC', what: 'battery charge (%)' },
 };
 
 mgu.run({
@@ -116,11 +117,12 @@ mgu.run({
             const d = car.data();
             if ((name === 'oil' || name === 'coolant') && !d.demo && G.isNum(d[name])) return { c: d[name], src: 'car signal' };
             const p = providers.value(name);
-            return p ? { c: p.c, text: p.text, label: p.label, src: p.app } : null;
+            return p ? { c: p.c, text: typeof p.pct === 'number' ? Math.round(p.pct) + '%' : p.text, label: p.label, src: p.app } : null;
         }
         const tempCol = (t, name, c) => {
             if (!G.isNum(c)) return t.dim;
             if (name === 'battery') return c < 5 ? t.cold : c > 45 ? t.crit : c > 38 ? t.warn : t.text;
+            if (name === 'soc') return t.text;
             return c >= 125 ? t.warn : c < 60 ? (t.cold || t.text) : t.text;
         };
         const src = {
@@ -135,7 +137,7 @@ mgu.run({
             extras(t) {
                 return chosen().map((k) => {
                     const v = valueNow(k);
-                    return { label: (v && v.label) || VALUES[k].label, text: v ? (G.isNum(v.c) ? temp(v.c) : v.text || '--') : '--', col: tempCol(t, k, v && v.c) };
+                    return { label: (v && v.label) || VALUES[k].label, text: v ? (G.isNum(v.c) ? temp(v.c) : v.text || '--') : '--', col: k === 'soc' ? (v ? t.text : t.dim) : tempCol(t, k, v && v.c) };
                 });
             },
             keepFast() { providers.want({ power: settings.get('power') !== 'off', values: chosen() }); },

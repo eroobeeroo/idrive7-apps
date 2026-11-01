@@ -61,12 +61,12 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
     let fast = 0;
     const prov = startProvider({ info() {}, warn: (m) => warns.push(m) }, {
         on: () => true, power: () => ({ kw: -1.6, old: false }), limits: () => ({ out: 120, in: 60 }), gaugeKw: () => 100,
-        battery: () => 28.3, oil: () => 81, keepFast: () => { fast++; },
+        battery: () => 28.3, oil: () => 81, soc: () => 64.4, keepFast: () => { fast++; },
     });
     await sleep(700);
     check('the provider writes while wanted, and keeps its reads fast', () => {
         const f = JSON.parse(fs.readFileSync(path.join(dir, 'edrive2.json'), 'utf8'));
-        assert(f.power.kw === -1.6 && f.values.battery.c === 28.3 && f.values.oil.c === 81 && fast > 0 && prov.status().wanted);
+        assert(f.power.kw === -1.6 && f.values.battery.c === 28.3 && f.values.oil.c === 81 && f.values.soc.pct === 64.4 && fast > 0 && prov.status().wanted);
     });
     // the car's own oil temperature wins over a provider's
     handlers.statusEngineTemperature && handlers.statusEngineTemperature({ temperatureEngineDrive: 48 + 90, temperatureEngineOilDrive: 48 + 95 });

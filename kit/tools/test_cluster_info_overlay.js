@@ -198,6 +198,18 @@ class FakeCR extends EventEmitter {
     check('status for the diagnostics', () => { const st = ov.status(); assert(/connected|connecting/.test(st.renderer) && /hud/.test(st.map)); });
     extras = []; night = false; settings.v.nightDim = 'on';
 
+    /* the kW without its bar on the HUD (setting power 'hudNumber', the default), with it on the cluster */
+    t += 300; ov._tick();
+    const withBar = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.visible && l.h > 30);
+    settings.v.power = 'hudNumber'; t += 300; ov._tick();
+    const noBar = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.visible && l.h > 30);
+    check('kW only on the HUD: a narrower panel without the bar', () => assert(withBar && noBar && noBar.w < withBar.w, JSON.stringify([withBar && withBar.w, noBar && noBar.w])));
+    check('the panel geometry without a bar is narrower than with it', () => {
+        const r = mapRect('hud', 70);
+        assert(badgeRect(r, 'bottom', 'hud', 2, 'number').w < badgeRect(r, 'bottom', 'hud', 2, true).w || badgeRect(r, 'bottom', 'hud', 2, 'number').h > badgeRect(r, 'bottom', 'hud', 2, true).h);
+    });
+    delete settings.v.power;
+
     /* no power provider (a car without eDrive Live): the values alone */
     kw = null; extras = [{ label: 'OIL', text: '88°' }, { label: 'COOL', text: '90°' }]; t += 300; ov._tick();
     ml = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.w > 60 && l.h > 30 && l.visible);
