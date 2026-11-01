@@ -29,7 +29,11 @@ const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
-const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
+const HUD_MAX_PCT = 85;
+// turn signal arrows on the HUD, either side of its speed readout (as older BMW HUDs show them)
+const ARROW = { w: 64, h: 48, y: 289, left: 168, right: 600 };
+const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
+const ARROW_TICK_MS = 60;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
 function mapRect(target, hudPct) {
@@ -88,6 +92,15 @@ function drawBadge(cv, t, pw, outMax, inMax) {
         else cv.roundRect(X(kw), by, x0 - X(kw), bh, bh / 2, GO);
     }
     cv.fillRect(Math.round(x0) - 1, by - 3, 2, bh + 6, t.text);
+}
+
+/** A turn signal arrow pointing left or right, green, w x h, on a transparent ground. */
+function drawArrow(cv, dir) {
+    const w = cv.w, h = cv.h, m = h * 0.08, head = w * 0.5, bar = h * 0.36;
+    cv.clear([0, 0, 0, 0]);
+    const tip = dir === 'left' ? m : w - m, base = dir === 'left' ? m + head : w - m - head, end = dir === 'left' ? w - m : m;
+    cv.convex([[tip, h / 2], [base, m], [base, h - m]], GO);
+    cv.fillRect(Math.min(base, end), h / 2 - bar / 2, Math.abs(end - base) + (dir === 'left' ? 1 : 0), bar, GO);
 }
 
 /** The rectangles where a and b (RGBA, w wide) differ: one per band split at `cut`, null when equal. */
@@ -242,14 +255,63 @@ function startOverlay(ctx, lv, opts) {
     readStatus();
     process.on('exit', () => { hide(); });
 
+    /* ---------- turn signals on the HUD ----------
+     * lv.indicator(): 'off' | 'left' | 'right' | 'both' (hazards), from the car's light module. The two arrows
+     * are drawn and sent once; blinking only switches their opacity (a few bytes each time, no pixels), and
+     * they stay visible (opacity 0 between flashes) so the HUD's slot is kept while they blink. */
+    const arrows = { left: 0, right: 0 };
+    let arrowsShown = false, blinkFrom = 0, lastDir = 'off', lastPhase = null, offSince = 0;
+    const signalsOn = () => settings.get('turnSignals') !== 'off' && typeof lv.indicator === 'function';
+    function arrowLayers() {
+        if (arrows.left || !client()) return !!arrows.left;
+        ['left', 'right'].forEach((d) => {
+            const c = new Canvas(ARROW.w, ARROW.h);
+            drawArrow(c, d);
+            const ref = cr.image({ target: 'hud', klass: 'overlay', z: 12, x: ARROW[d], y: ARROW.y, w: ARROW.w, h: ARROW.h, iw: ARROW.w, ih: ARROW.h, visible: false, opacity: 0 });
+            if (ref) cr.pixels(ref, null, Buffer.from(c.d.buffer, c.d.byteOffset, c.d.length));
+            arrows[d] = ref;
+        });
+        log.info('turn signals: arrows on the HUD');
+        return !!arrows.left;
+    }
+    function hideArrows() {
+        if (arrowsShown && cr) ['left', 'right'].forEach((d) => { if (arrows[d]) cr.set(arrows[d], { visible: false, opacity: 0 }); });
+        arrowsShown = false;
+        lastPhase = null;
+    }
+    function arrowTick() {
+        const dir = signalsOn() ? lv.indicator() || 'off' : 'off';
+        const tm = now();
+        if (dir === 'off') {
+            // the arrows go a moment after the stalk is let go (no flicker between flashes on tap-blink)
+            if (lastDir !== 'off') offSince = tm;
+            lastDir = 'off';
+            if (arrowsShown && tm - offSince > 1200) hideArrows();
+            else if (arrowsShown && lastPhase !== false) { ['left', 'right'].forEach((d) => cr.set(arrows[d], { opacity: 0 })); lastPhase = false; }
+            return;
+        }
+        if (dir !== lastDir) { blinkFrom = tm; lastDir = dir; lastPhase = null; }
+        if (!arrowLayers()) return;
+        if (!arrowsShown) { ['left', 'right'].forEach((d) => cr.set(arrows[d], { visible: true, opacity: 0 })); arrowsShown = true; }
+        const on = Math.floor((tm - blinkFrom) / BLINK_MS) % 2 === 0;
+        if (on === lastPhase) return;
+        lastPhase = on;
+        ['left', 'right'].forEach((d) => cr.set(arrows[d], { opacity: on && (dir === d || dir === 'both') ? 1 : 0 }));
+    }
+    const arrowTimer = si(arrowTick, ARROW_TICK_MS);
+    process.on('exit', () => { hideArrows(); });
+
     return {
         /** Whether the badge is on the map now. */
         shown: () => visible,
         /** The Waze map as status.json says: { showing, target, pct }. */
         map: () => Object.assign({}, map),
-        stop() { ci(poll); ci(draw); if (watcher) watcher.close(); hide(); if (cr) cr.close(); },
+        stop() { ci(poll); ci(draw); ci(arrowTimer); if (watcher) watcher.close(); hide(); hideArrows(); if (cr) cr.close(); },
+        /** The turn signal arrows: { shown, phase } (phase true: lit). */
+        arrows: () => ({ shown: arrowsShown, phase: lastPhase, refs: Object.assign({}, arrows) }),
+        _arrowTick: arrowTick,
         _tick: tick, _read: readStatus,
     };
 }
 
-module.exports = { startOverlay, mapRect, badgeRect, drawBadge, changed };
+module.exports = { startOverlay, mapRect, badgeRect, drawBadge, drawArrow, changed };

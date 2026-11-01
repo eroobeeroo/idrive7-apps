@@ -123,6 +123,15 @@ mgu.run({
                 else if (G.isNum(live.speed) && !live.standSince) live.standSince = Date.now();
             },
         }, 'speed');
+        // the turn signals, for the arrows on the HUD (overlay.js): ControlIndicateDirection
+        // 1 / 3 tap / steady left, 2 / 4 right, 8 both (hazards), 0 off
+        live.indicator = 'off';
+        watch('de.bmw.body.Light', {
+            StatusFunctionsIndicators: (v) => {
+                const c = v && (v.controlIndicateDirection !== undefined ? v.controlIndicateDirection : one(v, 'controlIndicateDirection'));
+                live.indicator = c === 1 || c === 3 ? 'left' : c === 2 || c === 4 ? 'right' : c === 8 ? 'both' : 'off';
+            },
+        }, 'turn signals');
         watch('de.bmw.infotainment.vehicle.CDS', {
             statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); if (r > 400) lastActiveT = Date.now(); } },
         }, 'rpm');
@@ -1177,6 +1186,7 @@ mgu.run({
             require('./overlay').startOverlay(ctx, {
                 powerNow: (t) => power(data(), t),
                 limitsNow: () => limitsKw(data()),
+                indicator: () => live.indicator,
                 keepFast() { const was = shown(); fastUntil = Date.now() + SHOWN_MS; if (!was && shown()) schedulePower(); },
             });
         } catch (e) { log.warn('map overlay: ' + e); }

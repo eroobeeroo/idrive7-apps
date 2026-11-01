@@ -84,7 +84,8 @@ class FakeCR extends EventEmitter {
     const logs = [];
     const log = { info: (m) => logs.push(m), warn: (m) => logs.push('WARN ' + m) };
     let kw = 18, fast = 0, t = 1e6;
-    const lv = { powerNow: () => pw(kw), limitsNow: () => ({ out: 120, in: 60 }), keepFast: () => { fast++; } };
+    let ind = 'off';
+    const lv = { powerNow: () => pw(kw), limitsNow: () => ({ out: 120, in: 60 }), keepFast: () => { fast++; }, indicator: () => ind };
     const wait = (ms) => new Promise((r) => setTimeout(r, ms || 30));
     const ov = startOverlay({ settings, log, theme: () => theme }, lv, { statusPath: status, ClusterRender: FakeCR, now: () => t, setInterval: () => 0, clearInterval: () => {} });
     const step = async () => { ov._read(); await wait(); };
@@ -169,6 +170,32 @@ class FakeCR extends EventEmitter {
     check('Always on the HUD, no reading: hidden', () => assert.strictEqual(ov.shown(), false));
     settings.v.meterDisplay = 'map'; kw = 5; t += 300; ov._tick();
     check('Waze on cluster stopped (status gone): hidden', () => assert.strictEqual(ov.shown(), false));
+    /* turn signals: arrows on the HUD, blinking by opacity only */
+    const sets = () => cr.log.filter((e) => e[0] === 'set').length;
+    ov._arrowTick();
+    check('no signal: no arrows', () => assert(!ov.arrows().shown && !ov.arrows().refs.left));
+    ind = 'left'; t += 10; ov._arrowTick();
+    const refs = ov.arrows().refs, la = cr.layers.get(refs.left), ra = cr.layers.get(refs.right);
+    check('left: both arrows made on the HUD, either side of the speed row; the left lit at once', () => {
+        assert(la.target === 'hud' && ra.target === 'hud' && la.x < 300 && ra.x > 560);
+        assert(ov.arrows().shown && la.visible && la.opacity === 1 && ra.opacity === 0);
+    });
+    const px0 = cr.log.filter((e) => e[0] === 'pixels').length;
+    t += 400; ov._arrowTick();
+    check('blinks: off after 375 ms', () => assert(la.opacity === 0 && la.visible));
+    t += 400; ov._arrowTick();
+    check('and on again, with no pixels sent', () => assert(la.opacity === 1 && cr.log.filter((e) => e[0] === 'pixels').length === px0));
+    const n0 = sets();
+    t += 50; ov._arrowTick();
+    check('nothing sent between flashes', () => assert.strictEqual(sets(), n0));
+    ind = 'both'; t += 10; ov._arrowTick();
+    check('hazards: both lit', () => assert(la.opacity === 1 && ra.opacity === 1));
+    ind = 'off'; t += 10; ov._arrowTick();
+    check('let go: dark, still placed for a moment', () => assert(la.opacity === 0 && ov.arrows().shown));
+    t += 1300; ov._arrowTick();
+    check('then hidden (the HUD slot let go)', () => assert(!ov.arrows().shown && !la.visible));
+    settings.v.turnSignals = 'off'; ind = 'right'; t += 10; ov._arrowTick();
+    check('setting off: no arrows', () => assert(!ov.arrows().shown));
     ov.stop();
 
     if (process.argv[2]) {
