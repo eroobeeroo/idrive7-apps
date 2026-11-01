@@ -36,10 +36,10 @@ check('badge inside the map, bottom and top', () => {
     ['map', 'hud', 'panel'].forEach((tg) => [0, 40, 70, 100].forEach((pct) => ['bottom', 'top'].forEach((w) => {
         const r = mapRect(tg, pct), b = badgeRect(r, w, tg);
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
-        assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 120);
+        assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 394, y: 348, w: 300, h: 84 });   // larger, a tenth of the map up from its edge
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 293, w: 140, h: 40 });   // the HUD's size, right of its speed readout
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 402, y: 348, w: 284, h: 84 });   // larger, a tenth of the map up from its edge, as wide as its content
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 293, w: 136, h: 40 });   // the HUD's size, right of its speed readout
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -106,7 +106,7 @@ class FakeCR extends EventEmitter {
         assert(cr && cr.app === 'edrive');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [394, 348, 300, 84]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [402, 348, 284, 84]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });

@@ -62,12 +62,27 @@ function mapRect(target, hudPct) {
     return { x, y, w, h };
 }
 
+/**
+ * The meter's own layout for a height h, left to right with no unused room: padding, the kW number
+ * right-aligned in a column just wide enough for "-188" (the widest reading it shows), "kW", the bar,
+ * padding. { w, pad, numR, unitX, bx, bw }.
+ */
+const measure = new Canvas(1, 1);
+function layout(h) {
+    const pad = Math.round(h * 0.26), gap = Math.round(h * 0.12);
+    const numW = Math.ceil(measure.textWidth('-188', Math.round(h * 0.54), { font: 'bold', literal: true }));
+    const unitW = Math.ceil(measure.textWidth('kW', Math.round(h * 0.25), { font: 'bold', literal: true }));
+    const numR = pad + numW, unitX = numR + Math.round(h * 0.06), bx = unitX + unitW + gap, bw = Math.round(h * 1.4);
+    return { w: bx + bw + pad, pad, numR, unitX, bx, bw };
+}
+
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
 function badgeRect(r, where, target, extras) {
     // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel;
     // each extra value (battery or oil temperature) adds EXTRA_W of the base width
     const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.5;
-    const w = Math.min(Math.round(200 * s * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3), h = Math.round(56 * s / 2) * 2;
+    const h = Math.round(56 * s / 2) * 2;
+    const w = Math.min(Math.ceil(layout(h).w * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3);
     // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
@@ -81,7 +96,7 @@ function badgeRect(r, where, target, extras) {
 /** Draws the badge: dark rounded backdrop, kW right-aligned, "kW", then the bar (regen left, use right). */
 function drawBadge(cv, t, pw, outMax, inMax, extras) {
     extras = extras || [];
-    const W = cv.w, h = cv.h, w = Math.round(W / (1 + EXTRA_W * extras.length));
+    const W = cv.w, h = cv.h, L = layout(h), w = Math.round(W / (1 + EXTRA_W * extras.length));
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
     // the extra values after the bar, each a small label over its value
@@ -91,10 +106,11 @@ function drawBadge(cv, t, pw, outMax, inMax, extras) {
         cv.text(e.label, cx, Math.round(h * 0.36), Math.round(h * 0.2), t.dim, { font: 'bold', align: 'center', literal: true });
         cv.text(e.text, cx, Math.round(h * 0.8), Math.round(h * 0.4), e.col || t.text, { font: 'bold', align: 'center', literal: true });
     });
-    const base = Math.round(h * 0.69), nx = Math.round(w * 0.39);
-    cv.text(pw.text, nx, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
-    cv.text('kW', nx + Math.round(w * 0.025), base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
-    const bx = Math.round(w * 0.56), bw = w - bx - Math.round(w * 0.06), bh = Math.max(6, Math.round(h * 0.2)), by = Math.round((h - bh) / 2);
+    // (the base part is at least as wide as its layout; rounding up to a multiple of 4 goes to the bar)
+    const base = Math.round(h * 0.69);
+    cv.text(pw.text, L.numR, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
+    cv.text('kW', L.unitX, base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
+    const bx = L.bx, bw = Math.max(L.bw, w - L.bx - L.pad), bh = Math.max(6, Math.round(h * 0.2)), by = Math.round((h - bh) / 2);
     const span = outMax + inMax, x0 = bx + bw * inMax / span;
     const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
     cv.roundRect(bx, by, bw, bh, bh / 2, withAlpha(t.track, 0.95));
