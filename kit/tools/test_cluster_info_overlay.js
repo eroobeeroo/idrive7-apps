@@ -30,9 +30,9 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
-check('HUD at 85 %, both values: large (68 high, was 40), right of the Waze car icon, inside the map', () => {
+check('HUD at 85 %, both values: 52 high (40 was hard to read, 68 too big), ends inside what the HUD shows (x 640)', () => {
     const r = mapRect('hud', 85), b = badgeRect(r, 'bottom', 'hud', 2), kwOnly = badgeRect(r, 'bottom', 'hud', 0);
-    assert(b.h >= 66 && b.x >= 405 && b.x + b.w <= r.x + r.w, JSON.stringify(b));
+    assert(b.h >= 44 && b.h <= 52 && b.x >= 405 && b.x + b.w <= 640, JSON.stringify(b));
     assert.strictEqual(kwOnly.x, 420);
 });
 check('HUD always, map on the cluster: the panel sits where it does with the map on the HUD (same HUD size)', () => {
@@ -47,7 +47,7 @@ check('badge inside the map, bottom and top', () => {
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
     assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 440, y: 376, w: 208, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 272, w: 184, h: 64 });   // the HUD's, right of its speed readout
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 284, w: 152, h: 52 });   // the HUD's, right of its speed readout
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -218,7 +218,7 @@ class FakeCR extends EventEmitter {
     });
     const px0 = cr.log.filter((e) => e[0] === 'pixels').length;
     t += 400; ov._arrowTick();
-    check('blinks: off after 375 ms', () => assert(la.opacity === 0 && la.visible));
+    check('blinks at the cluster arrow rate: off after 335 ms', () => assert(la.opacity === 0 && la.visible));
     t += 400; ov._arrowTick();
     check('and on again, with no pixels sent', () => assert(la.opacity === 1 && cr.log.filter((e) => e[0] === 'pixels').length === px0));
     const n0 = sets();

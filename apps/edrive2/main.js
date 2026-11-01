@@ -290,7 +290,8 @@ mgu.run({
         const IDLE_AFTER_MOVE = 3 * 60000, IDLE_AFTER_USER = 10 * 60000;
         let lastUserT = Date.now(), lastActiveT = 0;
         const driving = () => Date.now() - lastActiveT < IDLE_AFTER_MOVE;
-        const inUse = () => driving() || Date.now() - lastUserT < IDLE_AFTER_USER;
+        // (or Cluster Info's panel is up asking for the power: keepFast(), so the kW shows from the start, parked too)
+        const inUse = () => driving() || Date.now() - lastUserT < IDLE_AFTER_USER || Date.now() < fastUntil;
         const touched = () => { const was = inUse(); lastUserT = Date.now(); if (!was) { log.info('in use again (user)'); schedulePower(); readSlow(); } };
         // (or Cluster Info's panel over the Waze map shows its power: provider.js keepFast() while it is up)
         let fastUntil = 0;
@@ -1214,7 +1215,12 @@ mgu.run({
                 gaugeKw: () => settings.get('gaugeKw'),
                 battery: () => { const ct = cellTemps(data()); return ct && G.isNum(ct.avg) ? ct.avg : null; },
                 oil: () => (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? live.oil : null),
-                keepFast() { const was = shown(); fastUntil = Date.now() + SHOWN_MS; if (!was && shown()) schedulePower(); },
+                keepFast() {
+                    const was = shown(), wasInUse = inUse();
+                    fastUntil = Date.now() + SHOWN_MS;
+                    if (!wasInUse) { log.info('in use again (Cluster Info)'); readSlow(); }
+                    if (!was && shown()) schedulePower();
+                },
             });
         } catch (e) { log.warn('cluster info: ' + e); }
 

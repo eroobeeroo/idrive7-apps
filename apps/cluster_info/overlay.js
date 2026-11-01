@@ -27,17 +27,18 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
-const HUD_VISIBLE_RIGHT = 760;   // the HUD shows at least to the 85 % map's right edge (x 740, seen on a G05)
+const HUD_VISIBLE_RIGHT = 640;   // the HUD shows up to x ~645-694 (OIL cut off past it, measured from photos, G05)
 const HUD_SPEED_CLEAR = 405;     // left edge limit: the speed readout ends at x ~331 and Waze's car icon at ~400 (85 % map, G05)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
+const HUD_MAX_H = 52;             // the HUD panel's height at most: 40 was hard to read, 68 too big
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
 const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster's proportions (5:4)
 const INDICATOR_GREEN = '#22d046';   // the cluster's indicator green
 const EXTRA_COL = 1.0;            // an extra value's column, of the panel's height (fits "188°")             // an extra value's column, of the meter's base width
 const NIGHT_DIM = 0.6;            // the HUD extras at night, of their brightness by day
-const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
-const ARROW_TICK_MS = 60;
+const BLINK_ON_MS = 335, BLINK_OFF_MS = 300;   // the cluster's own arrow, measured from a video (G05): 635 ms a flash
+const ARROW_TICK_MS = 25;        // (the flash edges within 25 ms of the cluster's)
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
 function mapRect(target, hudPct) {
@@ -84,7 +85,7 @@ function badgeRect(r, where, target, extras, hasPower) {
     if (hasPower === undefined) hasPower = true;
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (a temperature) adds a column EXTRA_COL times the height wide
-    let s = target === 'hud' ? Math.max(0.62, Math.min(1.7, r.w / 400)) : 1.3;   // (HUD: as large as the room allows)
+    let s = target === 'hud' ? Math.max(0.62, Math.min(HUD_MAX_H / 56, r.w / 400)) : 1.3;   // (HUD: up to HUD_MAX_H high)
     const size = (sc) => {
         const hh = Math.round(56 * sc / 2) * 2;
         const L = layout(hh), ww = (hasPower ? L.w : L.pad) + (extras || 0) * colW(hh) + (hasPower ? 0 : L.pad);
@@ -369,7 +370,7 @@ function startOverlay(ctx, lv, opts) {
         if (dir !== lastDir) { blinkFrom = tm; lastDir = dir; lastPhase = null; }
         if (!arrowLayers()) return;
         if (!arrowsShown) { ['left', 'right'].forEach((d) => cr.set(arrows[d], { visible: true, opacity: 0 })); arrowsShown = true; }
-        const on = Math.floor((tm - blinkFrom) / BLINK_MS) % 2 === 0;
+        const on = (tm - blinkFrom) % (BLINK_ON_MS + BLINK_OFF_MS) < BLINK_ON_MS;
         if (on === lastPhase) return;
         lastPhase = on;
         const lit = hudOpacity();
