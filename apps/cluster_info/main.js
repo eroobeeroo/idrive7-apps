@@ -18,6 +18,7 @@ const G = require('./kit/gauges');
 const Car = require('./kit/car');
 const { startOverlay, drawBadge, badgeRect, mapRect } = require('./overlay');
 const { startProviders, DIR } = require('./providers');
+const IND = require('./indicators');
 
 const W = 1600, H = 520;
 const GO = '#2fd27a';
@@ -52,15 +53,10 @@ mgu.run({
          * controlIndicateDirection: 1 / 3 tap / steady left, 2 / 4 right, 8 both (hazards), 0 off; else
          * activeFunctionIndicateDirection, the function blinking: 7 / 9 / 18 / 20 / 22 left, 8 / 10 / 19 / 21 / 23
          * right, hazards and alarms both, 0 off. The raw values show on this app's page. */
-        const ACTIVE_LEFT = [7, 9, 18, 20, 22], ACTIVE_RIGHT = [8, 10, 19, 21, 23], ACTIVE_BOTH = [1, 5, 6, 11, 12, 13, 16, 17, 24, 25];
         const onIndicators = (what) => (v) => {
             live.raw[what] = JSON.stringify(v);
             const c = one(v, 'controlIndicateDirection'), a = one(v, 'activeFunctionIndicateDirection');
-            let dir = null;
-            if (c === 1 || c === 3) dir = 'left'; else if (c === 2 || c === 4) dir = 'right'; else if (c === 8) dir = 'both'; else if (c === 0) dir = 'off';
-            if (dir === null || (dir === 'off' && G.isNum(a) && a > 0 && a < 250)) {
-                dir = ACTIVE_LEFT.indexOf(a) >= 0 ? 'left' : ACTIVE_RIGHT.indexOf(a) >= 0 ? 'right' : ACTIVE_BOTH.indexOf(a) >= 0 ? 'both' : a === 0 ? 'off' : dir;
-            }
+            const dir = IND.direction(c, a);
             if (dir) { if (dir !== live.indicator) log.info('turn signals: ' + dir + ' (' + what + ' ' + c + ' / ' + a + ')'); live.indicator = dir; }
         };
         watch('de.bmw.body.Light', {
@@ -71,8 +67,8 @@ mgu.run({
         watch('de.bmw.infotainment.vehicle.Vehicle', {
             statusDayNightChangeOver: (v) => {
                 live.raw['day / night'] = JSON.stringify(v);
-                const c = one(v, 'dayNightChangeOver');
-                if (c === 1) live.night = false; else if (c === 2) live.night = true;
+                const n = IND.night(one(v, 'dayNightChangeOver'));
+                if (n !== null) live.night = n;
             },
         }, 'day / night');
 

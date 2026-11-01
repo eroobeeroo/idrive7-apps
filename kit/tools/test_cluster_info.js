@@ -78,6 +78,17 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
     fs.writeFileSync(process.env.WOC_STATUS, JSON.stringify({ state: 'idle', target: 'map', hud_width_pct: 0 }));
     await sleep(4500);
     check('panel down: the provider stops writing and removes its file', () => assert(!fs.existsSync(path.join(dir, 'edrive2.json')) && !prov.status().wanted));
+    // the turn signals and day / night as the car sends them (names, from photos of this app's page on a G05)
+    const IND = require(path.join(ROOT, 'apps', 'cluster_info', 'indicators.js'));
+    check('turn signals by name: right, left, hazards, off; day / night by name', () => {
+        assert.strictEqual(IND.direction('DAUER_BLINKEN_RECHTS_EIN', 'DAUERBLINKEN_RECHTS'), 'right');
+        assert.strictEqual(IND.direction('DAUER_BLINKEN_LINKS_EIN', 'DAUERBLINKEN_LINKS'), 'left');
+        assert.strictEqual(IND.direction('BEIDSEITIGES_BLINKEN_EIN', 'WARNBLINKEN_MANUELL'), 'both');
+        assert.strictEqual(IND.direction('TIPP_BLINKEN_LINKS_EIN', 'TIPPBLINKEN_LINKS'), 'left');
+        assert.strictEqual(IND.direction('BLINKEN_AUS', 'BLINKEN_AUS'), 'off');
+        assert.strictEqual(IND.direction(4, 8), 'right');
+        assert.strictEqual(IND.night('TAG'), false); assert.strictEqual(IND.night('NACHT'), true); assert.strictEqual(IND.night('KEINE_AENDERUNG'), null);
+    });
     console.log(ok + ' checks passed');
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

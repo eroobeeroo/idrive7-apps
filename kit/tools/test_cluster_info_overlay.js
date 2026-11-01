@@ -30,10 +30,13 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
-check('HUD, both extras: made smaller to end inside what the HUD shows, still at x 420 (clear of the car arrow)', () => {
-    const b = badgeRect(mapRect('hud', 0), 'bottom', 'hud', 2), one = badgeRect(mapRect('hud', 0), 'bottom', 'hud', 1);
-    assert(b.x === 420 && b.x + b.w <= 628 && b.h < one.h, JSON.stringify(b));
-    assert.strictEqual(one.x, 420);
+check('HUD at 85 %, both values: large (68 high, was 40), right of the Waze car icon, inside the map', () => {
+    const r = mapRect('hud', 85), b = badgeRect(r, 'bottom', 'hud', 2), kwOnly = badgeRect(r, 'bottom', 'hud', 0);
+    assert(b.h >= 66 && b.x >= 405 && b.x + b.w <= r.x + r.w, JSON.stringify(b));
+    assert.strictEqual(kwOnly.x, 420);
+});
+check('HUD always, map on the cluster: the panel sits where it does with the map on the HUD (same HUD size)', () => {
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2), badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2));
 });
 check('HUD widest: 85 % (680x300), 100 % is held to it', () => { assert.deepStrictEqual(mapRect('hud', 85), mapRect('hud', 100)); assert.strictEqual(mapRect('hud', 85).w, 680); });
 check('unknown target: none', () => assert.strictEqual(mapRect('nope', 0), null));
@@ -43,8 +46,8 @@ check('badge inside the map, bottom and top', () => {
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 422, y: 376, w: 244, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 293, w: 136, h: 40 });   // the HUD's size, right of its speed readout
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 440, y: 376, w: 208, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 272, w: 184, h: 64 });   // the HUD's, right of its speed readout
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -111,7 +114,7 @@ class FakeCR extends EventEmitter {
         assert(cr && cr.app === 'cluster_info');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [422, 376, 244, 72]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [440, 376, 208, 72]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });
@@ -163,10 +166,10 @@ class FakeCR extends EventEmitter {
     write({ state: 'showing', target: 'map', hud_width_pct: 70 });
     await step();
     settings.v.show = 'hud'; t += 300; ov._tick();
-    check('Always on the HUD, the map on the cluster: the badge on the HUD at its standard map place', () => {
-        const l = [...cr.layers.values()][0], r = mapRect('hud', 0);
+    check('Always on the HUD, the map on the cluster: the panel where it is with the map on the HUD (its 70 % size), not moved up', () => {
+        const l = [...cr.layers.values()][0], b = badgeRect(mapRect('hud', 70), 'bottom', 'hud', 0, true);
         assert.strictEqual(l.target, 'hud'); assert(ov.shown());
-        assert(l.y + l.h <= r.y + r.h && l.y > r.y + r.h / 2, JSON.stringify(l));
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [b.x, b.y, b.w, b.h]);
     });
     fs.unlinkSync(status);
     await step();

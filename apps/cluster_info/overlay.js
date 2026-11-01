@@ -27,14 +27,14 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
-const HUD_VISIBLE_RIGHT = 628;   // the HUD shows no further right than this (OIL was cut off past x ~630 on a G05)
-const HUD_SPEED_CLEAR = 345;     // the speed readout's right edge, measured from a photo (x ~332)
+const HUD_VISIBLE_RIGHT = 760;   // the HUD shows at least to the 85 % map's right edge (x 740, seen on a G05)
+const HUD_SPEED_CLEAR = 405;     // left edge limit: the speed readout ends at x ~331 and Waze's car icon at ~400 (85 % map, G05)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
 const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster's proportions (5:4)
 const INDICATOR_GREEN = '#22d046';   // the cluster's indicator green
-const EXTRA_W = 0.36;             // an extra value's column, of the meter's base width
+const EXTRA_COL = 1.0;            // an extra value's column, of the panel's height (fits "188°")             // an extra value's column, of the meter's base width
 const NIGHT_DIM = 0.6;            // the HUD extras at night, of their brightness by day
 const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
 const ARROW_TICK_MS = 60;
@@ -69,11 +69,13 @@ function mapRect(target, hudPct) {
  * padding. { w, pad, numR, unitX, bx, bw }.
  */
 const measure = new Canvas(1, 1);
+/** An extra value's column width for a panel h high. */
+const colW = (h) => Math.round(h * EXTRA_COL);
 function layout(h) {
-    const pad = Math.round(h * 0.26), gap = Math.round(h * 0.12);
+    const pad = Math.round(h * 0.2), gap = Math.round(h * 0.1);
     const numW = Math.ceil(measure.textWidth('-188', Math.round(h * 0.54), { font: 'bold', literal: true }));
     const unitW = Math.ceil(measure.textWidth('kW', Math.round(h * 0.25), { font: 'bold', literal: true }));
-    const numR = pad + numW, unitX = numR + Math.round(h * 0.06), bx = unitX + unitW + gap, bw = Math.round(h * 1.4);
+    const numR = pad + numW, unitX = numR + Math.round(h * 0.05), bx = unitX + unitW + gap, bw = Math.round(h * 1.05);
     return { w: bx + bw + pad, pad, numR, unitX, bx, bw };
 }
 
@@ -81,27 +83,29 @@ function layout(h) {
 function badgeRect(r, where, target, extras, hasPower) {
     if (hasPower === undefined) hasPower = true;
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
-    // each extra value (battery or oil temperature) adds EXTRA_W of the base width
-    let s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.3;
+    // each extra value (a temperature) adds a column EXTRA_COL times the height wide
+    let s = target === 'hud' ? Math.max(0.62, Math.min(1.7, r.w / 400)) : 1.3;   // (HUD: as large as the room allows)
     const size = (sc) => {
         const hh = Math.round(56 * sc / 2) * 2;
-        const L = layout(hh), ww = hasPower ? L.w * (1 + EXTRA_W * (extras || 0)) : L.w * EXTRA_W * (extras || 0) + L.pad;
+        const L = layout(hh), ww = (hasPower ? L.w : L.pad) + (extras || 0) * colW(hh) + (hasPower ? 0 : L.pad);
         return [hh, Math.min(Math.ceil(ww / 4) * 4, r.w & ~3)];
     };
     let [h, w] = size(s);
-    // the HUD: it stays right of the speed readout, clear of the car's arrow in the map's middle; a meter too
-    // wide to end inside what the HUD shows there (extra values) is made smaller instead of moved left
+    // the HUD: right of the speed readout. A panel too wide to end inside the map there first moves left (under
+    // the car arrow's stem, as far as HUD_SPEED_CLEAR), and only then is made smaller
     const hudRight = Math.min(r.x + r.w, HUD_VISIBLE_RIGHT);
-    if (target === 'hud' && where !== 'top' && Math.max(r.x + Math.floor((r.w - w) / 2), HUD_SPEED_RIGHT) + w > hudRight) {
-        const x0 = Math.max(r.x + Math.floor((r.w - w) / 2), HUD_SPEED_RIGHT);
-        s = Math.max(s * 0.7, s * (hudRight - x0) / w - 0.01);
+    if (target === 'hud' && where !== 'top' && HUD_SPEED_CLEAR + w > hudRight) {
+        const min = s * 0.7;
+        s = Math.max(min, s * (hudRight - HUD_SPEED_CLEAR) / w);
         [h, w] = size(s);
+        // (rounding to whole pixels and multiples of 4 can leave it a little too wide)
+        while (HUD_SPEED_CLEAR + w > hudRight && s > min) { s = Math.max(min, s - 0.02); [h, w] = size(s); }
     }
     // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
     // (cluster: at the bottom edge, below the car's arrow in the middle of the map, which it covered higher up)
-    const m = target === 'hud' ? Math.round(10 * s) : 32;   // (cluster: clear of the dimmed edge below)
+    const m = target === 'hud' ? 4 : 32;   // (HUD: its digits on the speed readout's line; cluster: clear of the dimmed edge below)
     const y = where === 'top' ? r.y + m : r.y + r.h - h - m;
     let x = r.x + Math.floor((r.w - w) / 2);
     if (target === 'hud' && where !== 'top') {
@@ -119,14 +123,14 @@ function badgeRect(r, where, target, extras, hasPower) {
  */
 function drawBadge(cv, t, pw, outMax, inMax, extras) {
     extras = extras || [];
-    const W = cv.w, h = cv.h, L = layout(h), w = pw ? Math.round(W / (1 + EXTRA_W * extras.length)) : 0;
+    const W = cv.w, h = cv.h, L = layout(h), w = pw ? Math.max(0, W - extras.length * colW(h)) : 0;
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
     const cw = extras.length ? (W - w) / extras.length : 0;
     extras.forEach((e, i) => {
         const cx = Math.round(w + cw * (i + (pw ? 0.42 : 0.5)));
-        cv.text(e.label, cx, Math.round(h * 0.36), Math.round(h * 0.2), t.dim, { font: 'bold', align: 'center', literal: true });
-        cv.text(e.text, cx, Math.round(h * 0.8), Math.round(h * 0.4), e.col || t.text, { font: 'bold', align: 'center', literal: true });
+        cv.text(e.label, cx, Math.round(h * 0.33), Math.round(h * 0.22), t.dim, { font: 'bold', align: 'center', literal: true });
+        cv.text(e.text, cx, Math.round(h * 0.84), Math.round(h * 0.5), e.col || t.text, { font: 'bold', align: 'center', literal: true });
     });
     if (!pw) return;
     // (the base part is at least as wide as its layout; rounding up to a multiple of 4 goes to the bar)
@@ -214,7 +218,8 @@ function startOverlay(ctx, lv, opts) {
     const onHud = () => settings.get('show') === 'hud';
     /** Where the badge goes now: { target, pct } (the map's place it sits in), null for nowhere. */
     const place = () => {
-        if (onHud()) return { target: 'hud', pct: map.showing && map.target === 'hud' ? map.pct : 0 };
+        // (the HUD size chosen in Waze on cluster, even while its map is on the cluster: the panel stays put)
+        if (onHud()) return { target: 'hud', pct: map.pct };
         return map.showing ? { target: map.target, pct: map.pct } : null;
     };
     let CR = opts.ClusterRender;
@@ -225,7 +230,7 @@ function startOverlay(ctx, lv, opts) {
 
     function readStatus() {
         fs.readFile(statusPath, 'utf8', (err, txt) => {
-            if (err) { if (map.showing) log.info('map overlay: Waze on cluster status gone'); map = { showing: false, target: null, pct: 0 }; statusText = ''; return tick(); }
+            if (err) { if (map.showing) log.info('map overlay: Waze on cluster status gone'); map = { showing: false, target: null, pct: map.pct };   /* (the HUD size kept) */ statusText = ''; return tick(); }
             if (txt === statusText) return undefined;
             statusText = txt;
             let s;
