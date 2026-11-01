@@ -2,7 +2,7 @@
   "id": "edrive2",
   "title": "eDrive Live",
   "description": "Live HV battery power (kW), cell temperatures and voltages, power limits and climate / HVAC power use - set up for the X5 xDrive45e (G05 PHEV)",
-  "version": "1.5.102",
+  "version": "1.5.103",
   "vendor": "custom",
   "loggingId": "OA9D",
   "iconGlyph": "battery",
@@ -173,8 +173,24 @@
       ]
     },
     {
+      "key": "meterDisplay",
+      "label": "kW meter on the cluster / HUD",
+      "type": "choice",
+      "default": "map",
+      "options": [
+        [
+          "map",
+          "Where the Waze map is"
+        ],
+        [
+          "hud",
+          "Always on the HUD"
+        ]
+      ]
+    },
+    {
       "key": "mapOverlay",
-      "label": "kW over the Waze map (cluster / HUD)",
+      "label": "kW meter over the Waze map: place",
       "type": "choice",
       "default": "bottom",
       "options": [

@@ -3,7 +3,10 @@
  * overlay.js - the battery's power now (kW and a small centre-zero bar) drawn over the Waze map in
  * the instrument cluster or the HUD, wherever Waze on cluster (robertn_waze_cluster) shows it.
  *
- * It follows the map: Waze on cluster writes /run/waze-on-cluster/status.json (state, target,
+ * Setting meterDisplay 'hud' puts it on the HUD instead, whenever there is a reading, wherever the map
+ * is (inside the HUD map's picture while the map is on the HUD, else at the HUD's standard map place).
+ *
+ * By default it follows the map: Waze on cluster writes /run/waze-on-cluster/status.json (state, target,
  * hud_width_pct) whenever that changes; while it says the map is showing, a small image layer
  * (class overlay, above the map) goes on the same target through the cluster render service
  * (cluster_render_client.js), at the bottom or top of the map's picture. Otherwise the layer is
@@ -25,6 +28,7 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
+const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
 function mapRect(target, hudPct) {
@@ -33,7 +37,7 @@ function mapRect(target, hudPct) {
     const [tw, th] = sc;
     let w, h;
     if (target === 'hud' && hudPct > 0) {
-        w = Math.floor(tw * Math.min(100, hudPct) / 100);
+        w = Math.floor(tw * Math.min(HUD_MAX_PCT, hudPct) / 100);
         h = Math.floor((w * TEX.h + TEX.w / 2) / TEX.w);
         if (h > th) { h = th; w = Math.floor((h * TEX.w + TEX.h / 2) / TEX.h); }
     } else {
@@ -51,9 +55,12 @@ function mapRect(target, hudPct) {
 }
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
-function badgeRect(r, where) {
+function badgeRect(r, where, target) {
     const s = Math.max(0.62, Math.min(1, r.w / 640));
-    const w = Math.round(200 * s / 4) * 4, h = Math.round(56 * s / 2) * 2, m = Math.round(10 * s);
+    const w = Math.round(200 * s / 4) * 4, h = Math.round(56 * s / 2) * 2;
+    // on the cluster a fifth of the map in from its edge (towards the middle, clear of the gauges' rims);
+    // on the HUD close to the edge of the map's picture
+    const m = target === 'hud' ? Math.round(10 * s) : Math.round(r.h * 0.2);
     return { x: r.x + Math.floor((r.w - w) / 2), y: where === 'top' ? r.y + m : r.y + r.h - h - m, w, h };
 }
 
@@ -121,6 +128,13 @@ function startOverlay(ctx, lv, opts) {
     const statusPath = opts.statusPath || STATUS;
     const now = opts.now || Date.now;
     const where = () => settings.get('mapOverlay') || 'bottom';
+    // 'map': on the display the Waze map is on, while it shows; 'hud': on the HUD whenever there is a reading
+    const onHud = () => settings.get('meterDisplay') === 'hud';
+    /** Where the badge goes now: { target, pct } (the map's place it sits in), null for nowhere. */
+    const place = () => {
+        if (onHud()) return { target: 'hud', pct: map.showing && map.target === 'hud' ? map.pct : 0 };
+        return map.showing ? { target: map.target, pct: map.pct } : null;
+    };
     let CR = opts.ClusterRender;
     let cr = null, ref = 0, geo = '', cv = null, last = null, visible = false, lastT = 0;
     let map = { showing: false, target: null, pct: 0 }, statusText = '';
@@ -138,7 +152,7 @@ function startOverlay(ctx, lv, opts) {
             const next = { showing: s.state === 'showing' && !!SCENES[target], target, pct: Number(s.hud_width_pct) || 0 };
             if (next.showing !== map.showing || next.target !== map.target) log.info('map overlay: Waze map ' + (next.showing ? 'showing on ' + next.target : 'not showing (' + (s.state || '?') + ')'));
             map = next;
-            if (map.showing) lv.keepFast();
+            if (place()) lv.keepFast();
             return tick();
         });
     }
@@ -165,10 +179,11 @@ function startOverlay(ctx, lv, opts) {
 
     /** The layer for the map's current place; a new one when its size or place changed. */
     function layer() {
-        const r = mapRect(map.target, map.pct);
+        const pl = place();
+        const r = pl && mapRect(pl.target, pl.pct);
         if (!r) return 0;
-        const b = badgeRect(r, where());
-        const key = [map.target, b.x, b.y, b.w, b.h].join(',');
+        const b = badgeRect(r, where(), pl.target);
+        const key = [pl.target, b.x, b.y, b.w, b.h].join(',');
         if (key === geo && ref) return ref;
         if (!client()) return 0;
         if (ref) cr.drop(ref);
@@ -176,14 +191,14 @@ function startOverlay(ctx, lv, opts) {
         visible = false;
         last = null;
         cv = new Canvas(b.w, b.h);
-        ref = cr.image({ target: map.target, klass: 'overlay', z: 10, x: b.x, y: b.y, w: b.w, h: b.h, iw: b.w, ih: b.h, visible: false });
+        ref = cr.image({ target: pl.target, klass: 'overlay', z: 10, x: b.x, y: b.y, w: b.w, h: b.h, iw: b.w, ih: b.h, visible: false });
         if (!ref) warnOnce('the renderer refused a ' + b.w + 'x' + b.h + ' layer');
-        else log.info('map overlay: ' + b.w + 'x' + b.h + ' at ' + b.x + ',' + b.y + ' on ' + map.target);
+        else log.info('map overlay: ' + b.w + 'x' + b.h + ' at ' + b.x + ',' + b.y + ' on ' + pl.target);
         return ref;
     }
 
     function tick() {
-        if (where() === 'off' || !map.showing) return hide();
+        if (where() === 'off' || !place()) return hide();
         const t = ctx.theme(), pw = lv.powerNow(t);
         if (!G.isNum(pw.kw)) return hide();               // no reading (parked, asleep, no link): nothing to show
         if (!layer()) return undefined;
@@ -216,7 +231,7 @@ function startOverlay(ctx, lv, opts) {
     };
     const si = opts.setInterval || setInterval, ci = opts.clearInterval || clearInterval;
     const poll = si(() => { watch(); readStatus(); }, POLL_MS);
-    const draw = si(() => { if (map.showing) { lv.keepFast(); tick(); } }, UPDATE_MS);
+    const draw = si(() => { if (where() !== 'off' && place()) { lv.keepFast(); tick(); } else hide(); }, UPDATE_MS);
     watch();
     readStatus();
     process.on('exit', () => { hide(); });

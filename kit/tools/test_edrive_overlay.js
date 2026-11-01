@@ -30,15 +30,15 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
-check('HUD full width: 800x352', () => assert.deepStrictEqual(mapRect('hud', 100), { x: 0, y: 63, w: 800, h: 352 }));
+check('HUD widest: 85 % (680x300), 100 % is held to it', () => { assert.deepStrictEqual(mapRect('hud', 85), mapRect('hud', 100)); assert.strictEqual(mapRect('hud', 85).w, 680); });
 check('unknown target: none', () => assert.strictEqual(mapRect('nope', 0), null));
 check('badge inside the map, bottom and top', () => {
     ['map', 'hud', 'panel'].forEach((tg) => [0, 40, 70, 100].forEach((pct) => ['bottom', 'top'].forEach((w) => {
-        const r = mapRect(tg, pct), b = badgeRect(r, w);
+        const r = mapRect(tg, pct), b = badgeRect(r, w, tg);
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 120);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom'), { x: 444, y: 414, w: 200, h: 56 });
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 444, y: 328, w: 200, h: 56 });   // a fifth of the map up from its edge
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -103,7 +103,7 @@ class FakeCR extends EventEmitter {
         assert(cr && cr.app === 'edrive');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [444, 414, 200, 56]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [444, 328, 200, 56]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });
@@ -151,8 +151,22 @@ class FakeCR extends EventEmitter {
         assert(l.y < r.y + 20 && ov.shown(), JSON.stringify(l));
     });
 
+    settings.v.mapOverlay = 'bottom';
+    write({ state: 'showing', target: 'map', hud_width_pct: 70 });
+    await step();
+    settings.v.meterDisplay = 'hud'; t += 300; ov._tick();
+    check('Always on the HUD, the map on the cluster: the badge on the HUD at its standard map place', () => {
+        const l = [...cr.layers.values()][0], r = mapRect('hud', 0);
+        assert.strictEqual(l.target, 'hud'); assert(ov.shown());
+        assert(l.y + l.h <= r.y + r.h && l.y > r.y + r.h / 2, JSON.stringify(l));
+    });
     fs.unlinkSync(status);
     await step();
+    t += 300; ov._tick();
+    check('Always on the HUD: shown without Waze on cluster too', () => assert(ov.shown()));
+    kw = null; t += 300; ov._tick();
+    check('Always on the HUD, no reading: hidden', () => assert.strictEqual(ov.shown(), false));
+    settings.v.meterDisplay = 'map'; kw = 5; t += 300; ov._tick();
     check('Waze on cluster stopped (status gone): hidden', () => assert.strictEqual(ov.shown(), false));
     ov.stop();
 
