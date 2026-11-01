@@ -30,6 +30,7 @@ git status --porcelain | while read -r code path; do
             case "$path" in
                 apps/"$KEEP_APP"/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
                 apps/*) git rm -qf "$path" 2>/dev/null || true; echo "rule: dropped $path (an app this fork doesn't carry)";;
+                .github/workflows/app-tests.yml) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path (its own test list)";;
                 README.md)
                     git checkout --theirs -- README.md
                     { cat "$HERE/readme-note.md"; cat README.md; } > README.md.new && mv README.md.new README.md
