@@ -28,7 +28,7 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
-const HUD_VISIBLE_RIGHT = 700;   // the HUD shows no further right than this (OIL was cut off at x 730, G05)
+const HUD_VISIBLE_RIGHT = 628;   // the HUD shows no further right than this (OIL was cut off past x ~630 on a G05)
 const HUD_SPEED_CLEAR = 345;     // the speed readout's right edge, measured from a photo (x ~332)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
@@ -82,9 +82,20 @@ function layout(h) {
 function badgeRect(r, where, target, extras) {
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (battery or oil temperature) adds EXTRA_W of the base width
-    const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.3;
-    const h = Math.round(56 * s / 2) * 2;
-    const w = Math.min(Math.ceil(layout(h).w * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3);
+    let s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.3;
+    const size = (sc) => {
+        const hh = Math.round(56 * sc / 2) * 2;
+        return [hh, Math.min(Math.ceil(layout(hh).w * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3)];
+    };
+    let [h, w] = size(s);
+    // the HUD: it stays right of the speed readout, clear of the car's arrow in the map's middle; a meter too
+    // wide to end inside what the HUD shows there (extra values) is made smaller instead of moved left
+    const hudRight = Math.min(r.x + r.w, HUD_VISIBLE_RIGHT);
+    if (target === 'hud' && where !== 'top' && Math.max(r.x + Math.floor((r.w - w) / 2), HUD_SPEED_RIGHT) + w > hudRight) {
+        const x0 = Math.max(r.x + Math.floor((r.w - w) / 2), HUD_SPEED_RIGHT);
+        s = Math.max(s * 0.7, s * (hudRight - x0) / w - 0.01);
+        [h, w] = size(s);
+    }
     // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
@@ -96,7 +107,7 @@ function badgeRect(r, where, target, extras) {
         // right of the speed readout, but never past what the HUD shows: a wider meter (extra values) moves left
         // as far as it must, down to HUD_SPEED_CLEAR
         x = Math.max(x, HUD_SPEED_RIGHT);
-        x = Math.max(Math.min(x, Math.min(r.x + r.w, HUD_VISIBLE_RIGHT) - w), Math.min(HUD_SPEED_CLEAR, x));
+        x = Math.max(Math.min(x, hudRight - w), Math.min(HUD_SPEED_CLEAR, x));
     }
     return { x, y, w, h };
 }

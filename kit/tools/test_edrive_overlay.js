@@ -30,10 +30,10 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
-check('HUD, both extras at 85 %: moved left to end by x 700 (what the HUD shows), clear of the speed', () => {
-    const b = badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2);
-    assert(b.x + b.w <= 700 && b.x >= 345, JSON.stringify(b));
-    assert.strictEqual(badgeRect(mapRect('hud', 85), 'bottom', 'hud', 0).x, 420);
+check('HUD, both extras: made smaller to end inside what the HUD shows, still at x 420 (clear of the car arrow)', () => {
+    const b = badgeRect(mapRect('hud', 0), 'bottom', 'hud', 2), one = badgeRect(mapRect('hud', 0), 'bottom', 'hud', 1);
+    assert(b.x === 420 && b.x + b.w <= 628 && b.h < one.h, JSON.stringify(b));
+    assert.strictEqual(one.x, 420);
 });
 check('HUD widest: 85 % (680x300), 100 % is held to it', () => { assert.deepStrictEqual(mapRect('hud', 85), mapRect('hud', 100)); assert.strictEqual(mapRect('hud', 85).w, 680); });
 check('unknown target: none', () => assert.strictEqual(mapRect('nope', 0), null));
