@@ -601,6 +601,8 @@ mgu.run({
         };
         // (the scan runs while the Diagnostic page, which shows it, is up)
         const lv = startLive(ctx, { diag, reader, exclusive, live, climateKw, page: () => (pages()[page] === 'diag' ? 'scan' : pages()[page]) });
+        // the kW over the Waze map in the cluster or HUD (Waze on cluster), while that map is showing
+        try { require('./overlay').startOverlay(ctx, lv); } catch (e) { log.warn('map overlay: ' + e); }
         const isLive = (p) => lv.PAGES.indexOf(p) >= 0;
         // the first bar button: "Read now", on the live pages their own action (this drive's totals, the scan)
         let actionText = 'Read now';

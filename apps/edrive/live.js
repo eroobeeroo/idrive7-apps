@@ -167,7 +167,9 @@ module.exports = function live(ctx, sh) {
     // a live page drawn after a pause: it was just opened
     const drawn = () => { const opened = Date.now() - lastDrawT > 5000; lastDrawT = Date.now(); if (opened) touched(); };
     // the app's screen, or its home-screen widget (only while driving): either one gets the fast power reads
-    const shown = () => inUse() && (Date.now() - lastDrawT < SHOWN_MS || (!!(ctx.widget && ctx.widget.active()) && driving()));
+    // (or the kW over the Waze map in the cluster / HUD, overlay.js: keepFast() while it is up)
+    let fastUntil = 0;
+    const shown = () => inUse() && (Date.now() - lastDrawT < SHOWN_MS || Date.now() < fastUntil || (!!(ctx.widget && ctx.widget.active()) && driving()));
 
     /* ---------- power: fast reads, drive totals, traces ---------- */
     const trip = { out: 0, regen: 0, charged: 0, climate: 0, peakOut: 0, peakIn: 0, since: Date.now() };
@@ -934,6 +936,14 @@ module.exports = function live(ctx, sh) {
         },
         /** The battery's power now as the pages show it: { kw, text, col, what } (kw null: no reading). */
         powerNow(t) { return power(data(), t); },
+        /** Power the battery allows now (kW): { out, in }, null before the limits are read. */
+        limitsNow() { return limitsKw(data()); },
+        /** Something outside the app's screen shows the power (the map overlay): fast reads for SHOWN_MS more. */
+        keepFast() {
+            const was = shown();
+            fastUntil = Date.now() + SHOWN_MS;
+            if (!was && shown()) schedulePower();
+        },
         /**
          * Measured consumption: kWh per km over the last km driven electric (perKm, over km; null before
          * 1 km) and over the last minute (nowPerKm, null while standing), from the battery's own power.

@@ -2,7 +2,7 @@
   "id": "edrive",
   "title": "eDrive",
   "description": "Real electric range, live battery power, cells and climate power, HV battery health (SOH) and energy, last charge, charge log, 12 V battery voltage and a home-screen widget",
-  "version": "2.7.2",
+  "version": "2.7.102",
   "vendor": "custom",
   "loggingId": "OA9C",
   "iconGlyph": "battery",
@@ -358,6 +358,26 @@
         4,
         8,
         12
+      ]
+    },
+    {
+      "key": "mapOverlay",
+      "label": "kW over the Waze map (cluster / HUD)",
+      "type": "choice",
+      "default": "bottom",
+      "options": [
+        [
+          "bottom",
+          "Bottom of the map"
+        ],
+        [
+          "top",
+          "Top of the map"
+        ],
+        [
+          "off",
+          "Off"
+        ]
       ]
     },
     {
