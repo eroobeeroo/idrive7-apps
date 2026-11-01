@@ -41,6 +41,9 @@ class Diag extends EventEmitter {
         this.signals = signals; this.log = log;
         this.p = null; this.available = false; this.error = null;
         this.quiet = false;           // true: don't log every request (apps that poll)
+        this.busyMs = 1000;           // pause before a retry when the transport is busy (x 1, 2, 3, 4)
+        this.busyLog = true;          // log each busy verdict (false: only count them in .busy)
+        this.busy = 0;
     }
 
     async init() {
@@ -69,24 +72,26 @@ class Diag extends EventEmitter {
      * Send one request; resolves with the transport's verdict ('NO_ERROR', 'REQUEST_PENDING', ...).
      * The transport turns requests away while it is still busy with an earlier one (e.g. a second
      * functional request a few seconds after the first: APP_REQUEST_TEMPORARILY_NOT_ACCEPTED), so
-     * such a verdict is retried a few times with a growing pause (1, 2, 3, 4 s; busyPauseMs sets the step).
-     * An app that polls can shorten the waits: busyPauseMs, pendingMs ("response pending", 10 s),
-     * callTimeoutMs (the transport call, 8 s).
+     * such a verdict is retried a few times with a growing pause (busyMs x 1, 2, 3, 4: 1, 2, 3, 4 s).
      */
-    async send(target, sid, data) {
+    async send(target, sid, data, opts) {
         if (!this.p) throw new Error(this.error || 'no diagnostic link');
         const d = data || [];
+        const maxRetries = opts && opts.maxRetries != null ? opts.maxRetries : 4;
+        const callTimeoutMs = opts && opts.callTimeoutMs || 8000;
+        const retryBaseMs = opts && opts.retryBaseMs || this.busyMs;
         if (!this.quiet) this.log.info('UDS -> ' + hex(target) + ': ' + hex(sid) + ' ' + d.map((x) => hex(x)).join(' '));
         for (let attempt = 0; ; attempt++) {
             const r = await this.signals.call(this.p, 'sendTasuRequest', {
                 sourceAddress: TESTER, targetAddress: target, serviceID: sid, subroutineID: 0,
                 udsDataLength: d.length, udsData: Buffer.from(d), deadlockTime: 0,
-            }, this.callTimeoutMs || 8000);
+            }, callTimeoutMs);
             const v = r && typeof r === 'object' ? (r.TasuErrorEnum || Object.keys(r).map((k) => r[k]).find((x) => typeof x === 'string')) : r;
             const verdict = v === undefined ? 'NO_ERROR' : String(v);
-            if (!/TEMPORARILY_NOT_ACCEPTED|BUSY/i.test(verdict) || attempt >= 4) return verdict;
-            this.log.info('transport busy (' + verdict + '), retrying');
-            await new Promise((res) => setTimeout(res, (this.busyPauseMs || 1000) * (attempt + 1)));
+            if (!/TEMPORARILY_NOT_ACCEPTED|BUSY/i.test(verdict) || attempt >= maxRetries) return verdict;
+            this.busy++;
+            if (this.busyLog) this.log.info('transport busy (' + verdict + '), retrying');
+            await new Promise((res) => setTimeout(res, retryBaseMs * (attempt + 1)));
         }
     }
 
@@ -106,6 +111,9 @@ class Diag extends EventEmitter {
             finish = () => { clearTimeout(idle); clearTimeout(hard); this.removeListener('frame', onFrame); this.removeListener('tasError', onErr); resolve(replies); };
             kick = (ms) => { clearTimeout(idle); idle = setTimeout(finish, ms); };
             onFrame = (f) => {
+                // every app gets every frame: only this service's answer (or refusal) is a reply
+                if (f.uds[0] !== sid + 0x40 && !(f.uds[0] === 0x7F && f.uds[1] === sid)) return;
+                if (sid === 0x19 && f.uds[0] === 0x59 && f.uds[1] !== (data || [])[0]) return;   // 0x19 echoes its sub-function
                 const pending = f.uds[0] === 0x7F && f.uds[2] === 0x78;
                 if (!pending || !replies.has(f.ecu)) replies.set(f.ecu, f.uds);
                 if (opts && opts.onReply && !pending) opts.onReply(f.ecu, replies.size);
@@ -126,22 +134,43 @@ class Diag extends EventEmitter {
      * accept(uds) (optional) skips replies that aren't ours - another app may be
      * talking to the same ECU at the same time.
      */
-    async physical(target, sid, data, timeoutMs, accept) {
-        let t, onFrame, finish;
+    async physical(target, sid, data, timeoutMs, accept, opts) {
+        let t, hardTimer, onFrame, finish, done = false;
         const got = new Promise((resolve) => {
-            finish = (v) => { clearTimeout(t); this.removeListener('frame', onFrame); resolve(v); };
+            finish = (v) => {
+                if (done) return;
+                done = true;
+                clearTimeout(t); clearTimeout(hardTimer);
+                this.removeListener('frame', onFrame); resolve(v);
+            };
             onFrame = (f) => {
                 if (f.ecu !== target) return;
-                if (f.uds[0] === 0x7F && f.uds[2] === 0x78) { clearTimeout(t); t = setTimeout(() => finish(null), this.pendingMs || 10000); return; }
+                if (f.uds[0] === 0x7F && f.uds[2] === 0x78) {      // response pending: never the reply itself
+                    if (f.uds[1] !== sid) return;                       // another request's (another app's) 78
+                    clearTimeout(t);
+                    t = setTimeout(() => finish(null), opts && opts.pendingTimeoutMs || 10000);
+                    return;
+                }
                 if (accept && !accept(f.uds)) return;
                 finish(f.uds);
             };
             this.on('frame', onFrame);
+            if (opts && opts.hardTimeoutMs) hardTimer = setTimeout(() => finish(null), opts.hardTimeoutMs);
         });
-        try { this._check(await this.send(target, sid, data)); } catch (e) { finish(null); throw e; }
-        if (!t) t = setTimeout(() => finish(null), timeoutMs || 4000);       // from when the transport took it
+        try { this._check(await this.send(target, sid, data, opts)); } catch (e) { finish(null); throw e; }
+        if (!done && !t) t = setTimeout(() => finish(null), timeoutMs || 4000); // from when the transport took it
         return got;
     }
+}
+
+// Request bytes a positive reply echoes after sid + 0x40: sub-function (10 / 11 / 27), DID (22 / 2E), DID + control
+// parameter (2F: 6F 60FD 03 .. is OPEN's answer, not OEM's 6F 60FD 00), sub-function + RID (31).
+const ECHO = { 0x10: 1, 0x11: 1, 0x27: 1, 0x22: 2, 0x2E: 2, 0x2F: 3, 0x31: 3 };
+/** accept(uds) for physical(): every app gets every frame from the ECU (car_vitals polls the DME), so
+ * only this request's positive reply with its echo, or a refusal of this service, is the answer. */
+function replyTo(sid, data) {
+    const echo = (data || []).slice(0, ECHO[sid] || 0);
+    return (u) => (u[0] === sid + 0x40 && echo.every((b, i) => u[i + 1] === b)) || (u[0] === 0x7F && u[1] === sid);
 }
 
 /**
@@ -169,4 +198,4 @@ function statusInfo(b) {
     return { label: 'HISTORY', sev: 'dim' };
 }
 
-module.exports = { Diag, parseDtcReply, statusInfo, toBytes, hex, NRC, ALL };
+module.exports = { Diag, parseDtcReply, statusInfo, toBytes, hex, NRC, ALL, replyTo };

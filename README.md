@@ -1,3 +1,5 @@
+**English** | [中文 (Chinese translation)](README.zh-CN.md)
+
 <h1 align="center">MGU Custom Apps</h1>
 
 <p align="center">
@@ -39,8 +41,9 @@ image box. It's the only route the SDK offers for custom graphics, and it tops o
 of frames per second: on the head unit's Atom CPU, just compressing one 1600 × 520 PNG takes
 about 60 ms, before anything is drawn or sent.
 
-These apps don't do that. They ship with **`mgu-renderd`**, a small render engine written for
-this project in C on OpenGL ES 2. An app doesn't send pictures at all: it sends a few kilobytes
+These apps don't do that. They ship with **`mgu-renderd`**, a render engine in C on OpenGL ES 2
+(since 2.0 [mgu-render](kit/renderd/README.md#the-engine-mgu-render) by Robert Nisipeanu and
+IterioDev, grown out of this project's first engine). An app doesn't send pictures at all: it sends a few kilobytes
 of **drawing commands** per frame, and the engine draws them on the head unit's Intel GPU, on
 its own compositor layer, in step with the display's refresh. Result: **a true 60 fps**, with
 needles and bars that glide instead of jump.
@@ -112,8 +115,28 @@ More in [How apps draw](#44-how-apps-draw-remote-hmi-rhmi) and [`kit/renderd`](k
 <td><img src="docs/screens/doom.png" alt="Doom"><br><b>Doom</b>: Freedoom in full resolution across the whole screen, on the iDrive controller, saves itself</td>
 </tr>
 <tr>
-<td><img src="docs/screens/edrive2.png" alt="eDrive Live power page"><br><b>eDrive Live</b>: HV battery power now, regen / drive against the battery's limits, drive totals</td>
-<td><img src="docs/screens/edrive2_battery.png" alt="eDrive Live battery page"><br><b>eDrive Live</b>: cell temperatures and voltages, coolant, power the battery allows</td>
+<td><img src="docs/screens/edrive2.png" alt="eDrive battery page"><br><b>eDrive</b>: HV battery power now, regen / drive against the battery's limits, drive totals</td>
+<td><img src="docs/screens/edrive2_battery.png" alt="eDrive battery page"><br><b>eDrive</b>: cell temperatures and voltages, coolant, power the battery allows</td>
+</tr>
+<tr>
+<td><img src="docs/screens/live_adjustments.png" alt="Engine Config, exhaust flap open"><br><b>Engine Config</b>: exhaust flap open, closed or handed back to the car (OEM), state read back from the DME</td>
+<td><img src="docs/screens/live_adjustments_closed.png" alt="Engine Config, exhaust flap closed"><br><b>Engine Config</b>: flap closed, the selected mode in red; more adjustments can be added as tabs</td>
+</tr>
+<tr>
+<td><img src="docs/screens/live_adjustments_map.png" alt="Live Adjustments, engine map"><br><b>Live Adjustments</b> (tuned DME): engine map 1–4 with one press; the DME echoes the request back</td>
+<td><img src="docs/screens/live_adjustments_cooling.png" alt="Live Adjustments, Max Cooling"><br><b>Live Adjustments</b> (tuned DME): Max Cooling on / off</td>
+</tr>
+<tr>
+<td><img src="docs/screens/live_adjustments_map_readback.png" alt="Live Adjustments, engine map read back"><br><b>Live Adjustments</b> (tuned DME, not yet tested on a car): engine map confirmed by reading it back from the DME</td>
+<td><img src="docs/screens/live_adjustments_burbles.png" alt="Live Adjustments, burbles"><br><b>Live Adjustments</b> (tuned DME, not yet tested on a car): burble aggression 0–12 picked with – / +, sent on Apply and read back; Off</td>
+</tr>
+<tr>
+<td><img src="docs/screens/live_data.png" alt="Live Data, a screen of gauges"><br><b>Live Data</b>: a screen of your own, sport-display bar and numbers with the last 5 minutes</td>
+<td><img src="docs/screens/live_data_trips.png" alt="Live Data, trips"><br><b>Live Data</b>: the trip computer, distance, fuel and cost per trip</td>
+</tr>
+<tr>
+<td><img src="docs/screens/live_data_engine.png" alt="Live Data, engine values"><br><b>Live Data</b>: the engine unit's values in groups, read live</td>
+<td><img src="docs/screens/live_data_pick.png" alt="Live Data, choosing a gauge's value"><br><b>Live Data</b>: a gauge's value chosen from a group, each with what it reads now</td>
 </tr>
 </table>
 
@@ -156,14 +179,24 @@ the unit and kept across reboots.
 | **Drag Timer** | 0-50, 0-100, 100-200, 0-200 km/h and ¼ mile (or mph equivalents), with interpolated splits, optional one-foot rollout, a live speed trace and saved best times. |
 | **G-Force** | Friction circle with a fading trail and a grip envelope that grows as you use more grip in each direction. Live lateral/longitudinal bars, session peaks per direction, time spent above 0.5 g, all-time records. The g numbers update at the *G-force display rate* (10 a second by default); the dot and trail move at full frame rate. |
 | **Warm-Up** | Oil and coolant gauges and a warm-up calculator: minutes and clock time until oil and coolant reach working temperature, from the measured warm-up rate (typical rates until enough is measured, "engine off" when a hybrid drives electric), projected on a temperature trend graph. A safe rev limit that rises with oil temperature, and a turbo cool-down countdown after hard driving (high rpm or high power: 30 s to 3 min of gentle driving, depending on how long you drove hard). |
-| **M Vitals** | A sport cluster: rpm, boost, speed with the gear (D / S / M + number), power from the iDrive sport display (its % × your car's max power, so stock or tuned engines both read right; kW, hp or PS) and torque (Nm or lb-ft), coolant and oil temperature, g-forces and more, over several pages, with peak values.  A Fuel & ignition page shows intake air temperature (IAT), high-pressure fuel (HPFP / rail) and low-pressure fuel (LPFP) pressure, ignition timing and the misfire counter of every cylinder (this driving cycle, OBD service 06), read from the DME over UDS / OBD (standard OBD data IDs, adjustable in `app.json` config.dme), plus how much warmer the intake air is than outside; the Thermals page adds the gearbox temperature from the gearbox unit (EGS, config.dme.egs). Each of these has an Auto / Show / Hide setting, and the tiles share the screen: whatever the car doesn't answer is left out. Tyre pressures (against the car's target) and temperatures are shown large on the Chassis page; its xDrive card can be set to Auto (shown once the car reports all-wheel drive), Show or Hide for rear-wheel-drive cars. When the car's own torque split signal sends nothing, the card reads the torque going to the front axle from the transfer case unit (LMV, UDS `22 DB32`, `app.json` config.xdrive) and estimates the split from engine torque and the gear; the card says where its number comes from. Boost, gearbox oil temperature, the tyre card and tyre temperatures have the same Auto / Show / Hide setting: Auto shows them once the car has sent real data, and a hidden item gives its space to the others. Values outside a plausible range (a tyre at 255 °C) and fields that never change (gearbox oil stuck at 0 °C) count as no data; the raw values the car sends for these go to the log (`raw tyre temperature`, `raw gearbox oil`, `raw FES boost`), to calibrate `app.json` config.scaling. Boost comes from the sport display, or, when that sends nothing usable, from the DME over OBD (charge / manifold pressure minus outside air pressure, candidates in config.dme.boost); the setting Boost from picks one by hand. Dials run from blue to red as they near the redline / boost limit. |
+| **M Vitals** | A sport cluster: rpm, boost, speed with the gear (D / S / M + number), power from the iDrive sport display (its % × your car's max power, so stock or tuned engines both read right; kW, hp or PS) and torque (Nm or lb-ft), coolant and oil temperature, g-forces and more, over several pages, with peak values.  A Fuel & ignition page shows intake air temperature (IAT), high-pressure fuel (HPFP / rail) and low-pressure fuel (LPFP) pressure, ignition timing, boost target against actual boost and requested against actual air charge (with a 5-minute trace of both, BMW DME DIDs 4AB0 / 580B / 480C / 5813 with OBD PID 0x70 as the fallback) and the misfire counter of every cylinder (this driving cycle, OBD service 06), read from the DME over UDS / OBD (standard OBD data IDs, adjustable in `app.json` config.dme), plus how much warmer the intake air is than outside; the Thermals page adds the gearbox temperature from the gearbox unit (EGS, config.dme.egs). Each of these has an Auto / Show / Hide setting, and the tiles share the screen: whatever the car doesn't answer is left out. Tyre pressures (against the car's target) and temperatures are shown large on the Chassis page; its xDrive card can be set to Auto (shown once the car reports all-wheel drive), Show or Hide for rear-wheel-drive cars. When the car's own torque split signal sends nothing, the card reads the torque going to the front axle from the transfer case unit (LMV, UDS `22 DB32`, `app.json` config.xdrive) and estimates the split from engine torque and the gear; the card says where its number comes from. Boost, gearbox oil temperature, the tyre card and tyre temperatures have the same Auto / Show / Hide setting: Auto shows them once the car has sent real data, and a hidden item gives its space to the others. Values outside a plausible range (a tyre at 255 °C) and fields that never change (gearbox oil stuck at 0 °C) count as no data; the raw values the car sends for these go to the log (`raw tyre temperature`, `raw gearbox oil`, `raw FES boost`), to calibrate `app.json` config.scaling. Boost comes from the sport display, or, when that sends nothing usable, from the DME over OBD (charge / manifold pressure minus outside air pressure, candidates in config.dme.boost); the setting Boost from picks one by hand. Dials run from blue to red as they near the redline / boost limit. |
 | **Fault Scanner** | Scans every control unit for stored fault codes (UDS over the head unit's diagnostic gateway), shows them per module with status, shows live Check Control messages, and can clear fault memories (two-press confirm). Fault texts come from your car's own coding-tool export (`kit/tools/dtc_texts.py`), a few hand-written ones, and, if you import one, a fault text database for every control unit (`kit/tools/dtc_texts.py --db`): units with faults are then asked their SGBD index (UDS 22 F1 50), which picks their texts and their name. Only English texts are imported (one with German in it is left out, and that fault shows no text). A fault code list (CSV, `kit/tools/dtc_texts.py --codes`) fills in faults that still have none, for the units its texts belong to. Fault text tables (the `dtc_scanner_*.json` files, `kit/tools/dtc_tables.py`, after `--db`) add a text for each unit type and each address. The build packs the whole database into one compressed file (`dtc_db.pack`: about 19 MB of texts in 3.7 MB, `kit/tools/pack_data.py`), and the app only unpacks the few KB that hold the codes it shows. The repository ships the fault text tables already packed (`apps/dtc_scanner/dtc_db.pack`: the tables and the SGBD index, used with permission); a local `dtc_db/` folder you import replaces it. Imported databases and car exports stay out of git. |
 | **eDrive** | For plug-in hybrids / EVs: real electric range that adapts to how your car is driven: the charge above the point where the engine starts, divided by what the car uses per km for driving (learned from electric-only driving, last ~60 km) plus what climate control and the on-board electrics draw per hour (heating when cold, A/C when hot, learned per outside-temperature band while standing or creeping with the engine off). Driving is learned per speed band (under 35, 35-60, 60-85, 85-110, over 110 km/h) and the range uses your current pace, so motorway driving shows less range than town. The climate's draw is also learned while driving (what it uses above the same speed with the climate off), seat and steering-wheel heating are counted from their levels, and an Energy page shows use per speed band, where the power goes now (driving, climate, seats, wheel, on-board, with the km each costs), the car's own power distribution figures and the HV battery temperature (also on the Range page). The climate draw costs range by the hour, so it costs more of it in slow traffic; the screen shows it in kW and the km it costs. Whether climate control is on comes from the car itself (ClimateMaster `statusClimateSystemOn`): switched off, only the on-board electrics (learned separately, typically 0.3 kW) are taken off and the range goes up; switched on, it goes down again (shown as CLIMATE ON / CLIMATE OFF, with A/C when the A/C button is on). Until it has learned, the range comes from the outside temperature (a full battery gives 50 km at 20 °C, 40-45 km at 10 °C, 30-38 km at 0 °C, 20-30 km at -10 °C, scaled to your own 20 °C range), shown with its low-high spread, battery health (SOH: how much a full charge holds compared to new, in % and kWh) and the energy in the battery now (kWh; the battery size when new is a setting, e.g. 12 kWh for a 330e / 530e, 24 kWh for an X5 45e). Also shows the last HV battery charge (+%, kWh, km added; a charge done while the head unit slept shows at the next start) and the 12 V battery voltage. A charge log page lists every charge (date, % and kWh added, range added, cost from your electricity price, 0.25 €/kWh by default) with monthly / all-time totals and a 14-day chart. On a car without a hybrid system it detects that the battery unit never answers and shows only the 12 V battery (or set Hybrid system = No). Charge and SOH are read from the battery control unit over UDS; a Diagnostics page shows the raw replies so the DIDs can be adjusted per model in `app.json`. |
-| **eDrive Live** | A companion to eDrive for live values, set up for the X5 xDrive45e (24 kWh) and adjustable for other plug-in hybrids. **Power:** the HV battery's power now in kW (pack voltage x current from the battery unit, read every second; + driving, - regen or charging), on a bar from the most regen to the most drive power the battery allows right now, a two-minute trace, and this drive's energy used, regen, net and peaks (Reset in the menu). **Battery:** cell core temperatures (min / mean / max on a scale with the comfortable band, 30-minute trace; the car's own battery temperature when the battery unit doesn't report them), coolant, lowest / highest cell voltage and the spread between them, and the discharge / charge power the battery allows now (lower when cold, hot, nearly empty or full). **Climate:** what the A/C compressor (the car's value), blower, seat and steering-wheel heating draw, and the climate's power measured from the battery: standing still with the engine off and not plugged in, the pack feeds only the car's own consumers, so that draw minus the on-board baseline (learned with the climate off) is what heating / A/C really use; while driving it is estimated. 10-minute trace and what an hour of it costs. Values come from the battery unit (SME) over UDS: `DD68` pack voltage, `DD69` current, `DDBF` cell voltages, `DDC0` cell temperatures, `DD6C` coolant, `DD7D` current limits (BMW's identifiers as OVMS decodes them on the i3); a Diagnostics page shows the replies, and `powerSign` flips the direction if a car reports current the other way. |
+| **eDrive: live pages** | eDrive's live values (`apps/edrive/live.js`), set up for the X5 xDrive45e (24 kWh) and adjustable for other plug-in hybrids. **Battery:** the HV battery's power now in kW (pack voltage x current from the battery unit, read every second; + driving, - regen or charging) on a bar from the most regen to the most drive power the battery allows right now, a two-minute trace, cell temperature and coolant; every cell's voltage as a bar (lowest / highest marked, the spread between them); and this drive: energy used, regen, net, how much of it went to driving and to the climate, and peaks (Reset drive totals in the menu starts a new one). **Climate on the Energy page:** standing still with the engine off and not plugged in, the pack feeds only the car's own consumers, so that draw minus the on-board baseline (learned with the climate off) is what heating / A/C really use; the Energy page's climate row shows that measurement (or the climate unit's own figures) instead of the estimate. Values come from the battery unit (SME) over UDS: `DD68` pack voltage, `DD69` current, `DDBF` cell voltages, `DDC0` cell temperatures, `DD6C` coolant, `DD7D` current limits (BMW's identifiers as OVMS decodes them on the i3); a Diagnostics page shows the replies, and `powerSign` flips the direction if a car reports current the other way. The **home-screen widget** (`startWidget`) shows live power, state, V / A, charge, a power bar, cells and this drive (big widget), or the same as text lines (small one); the Battery unit and Scan pages come with the Diagnostics pages setting. |
+| **Live Data** | Live values from the car and its control units, and nothing but reading. **Gauges:** screens of your own made of dials, sport-display bars and big numbers (with the last 5 minutes as a trace); tap a gauge to choose its value from the car signals, the trip computer or the engine unit; one screen can be the home-screen widget. **Trips:** a trip computer that counts every drive in the background: distance, fuel, consumption and cost per trip, the last 5 trips, today, 7 / 30 days. **Signals:** what the car sends the head unit on its own (SOME/IP, nothing asked). **Engine:** the engine unit's values worth a look in groups (oil pressure and level, rail pressures, boost, ignition and knock per cylinder, VANOS, injector corrections, spark plug and particulate filter wear ...), decoding built in for the B58 / B48 / B38 (DME8FF_R). **Units:** every control unit's identification and, with a catalog made from the public SGBD reference (`kit/tools/sgbd_catalog.py`, not in git), every identifier its type lists. Its diagnostic link refuses everything but UDS `22` and OBD-II `01` / `09` before it reaches the car. Details: [apps/live_data/README.md](apps/live_data/README.md). |
 | **Service** | The car's service requirements (BMW Condition Based Service) as the iDrive's own *Vehicle status > Service requirements* shows them: engine oil, brakes, brake fluid, vehicle check, inspection and the rest, each with the distance and date the car gives (in its own language and units), coloured green / yellow / red, a summary of the next service, and the item's service hint text as details. Read from the instrument cluster (`KombiInterface_2`). Read-only: these cars offer the head unit no service reset (that is done in the cluster's own menu or by a workshop). |
-| **Doom** | Freedoom: Phase 1 (four episodes, free game data) running in the head unit as WebAssembly. The engine draws the 3D view in full resolution across the whole screen (1920 x 504, Doom's vertical field of view widened to the screen), with the status bar, menus and messages on top at 4:3; 35 fps on the VM. A main menu (Play / Continue, New game, all settings) comes first; the game then has the screen to itself with no header or button bar, and BACK returns to the menu. **Turn the controller to aim, push it to walk and sidestep, press to fire and open doors, press twice for the next weapon.** While you play, the game has the controller to itself: the HMI ignores the knob, press and tilt, so pushing forward no longer opens the HMI's pull-down menu and pushing left no longer leaves the game. BACK, MENU and the touchscreen always work. This uses the controller gate that `deploy-car.sh` loads into the HMI (see [5.1](#51-what-deploy-carsh-install-does)). Without the gate, the game reads the controller signal itself and the HMI reacts to it too. It pauses when you leave the screen or a popup / call covers it, and saves itself each time, so it carries on where you stopped. Settings, in the main menu: difficulty, episode, move speed (slow walk by default, walk, run), aim speed and direction, render resolution (full / medium / low). GPL-2.0, see [Doom licences](#doom-licences). |
+| **Doom** | Freedoom: Phase 1 (four episodes, free game data) running in the head unit as WebAssembly. The engine draws the 3D view in full resolution across the whole screen (1920 x 504, Doom's vertical field of view widened to the screen), with the status bar, menus and messages on top at 4:3; 35 fps on the VM. A main menu (Play / Continue, New game, all settings) comes first; the game then has the screen to itself with no header or button bar, and BACK returns to the menu. **Turn the controller to aim, push it to walk and sidestep, press to fire and open doors, press twice for the next weapon.** While you play, the game has the controller to itself: the HMI ignores the knob, press and tilt, so pushing forward no longer opens the HMI's pull-down menu and pushing left no longer leaves the game. BACK, MENU and the touchscreen always work. This uses the controller gate that `deploy-car.sh` loads into the HMI (see [5.1](#51-what-deploy-carsh-install-does)). Without the gate, the game reads the controller signal itself and the HMI reacts to it too. It pauses when you leave the screen or a popup / call covers it, and saves itself each time, so it carries on where you stopped. Settings, in the main menu: difficulty, episode, move speed (slow walk by default, walk, run), aim speed and direction, render resolution (full / medium / low). GPL-2.0, see [Doom licences](#doom-licences). **Parked only** by default: the game saves and waits while the car drives (setting *Parked only*, can be turned off). |
+| **Engine Config** | Live engine tweaks as tabs, starting with **Exhaust Flap**: Open the flap, Close it, or hand control back to the car (OEM), shown as the twin tailpipes opening and closing with the big state word. **Safe by default** — the *Exhaust Flap* setting ships **Disarmed** (simulated, touches nothing); set it to **Armed** only after you have validated the command on your own car. When armed and a matching DME is detected, it drives the electric exhaust flap over the car's own diagnostic link (UDS `2F 60FD` "EL_AGK", Bosch MG1 / DME8 as used by B48 / B58 / S58 on MGU ID7; OPEN 10 %, CLOSE 90 %, OEM hands control back and the DME self-times the override in ~20 s). The command was confirmed on a real car; other DME variants are unverified, so each owner arms it themselves. **Tuned DME (experimental):** pick the tuning software the car runs in Settings (*Tuning software*: Off, BM3, MHD; ships Off, which sends nothing) and its tabs appear: **BM3** — Engine Map 1–4 and Burbles (written to the DME's memory and confirmed by read-back, only after the BM3 CustomROM is identified) and Active Sound (ASD on / off); **MHD** — Engine Map 1–4 and Max Cooling (each press counts when the DME echoes it). Other tuning software can be added (see the app's README). **xDrive (experimental, ships Off):** switches xDrive off until the next ignition cycle through the DSC's own `LMV_FUNKTION` job (issue #28). It only works with the engine off, in P, parking brake on, stationary, and needs two presses. The DSC reports AWD / RWD once the engine runs, and the ignition cycle brings xDrive back. |
 
-On the VM or a bench unit without vehicle data, every app switches to a built-in demo drive
+**Experimental:** [Transmission Config](apps/zf8hp/README.md) (ZF 8HP) reads clutch adaptations, shift maps,
+temperature history and live transmission data; it is read-only, requires the verified EGS
+variant, has only limited G22 smoke testing (the G20 330e's hybrid 8HP is read too) and displays an EXPERIMENTAL badge. Its synthetic
+demo is explicit and off by default. The tune tabs of [Engine Config](apps/live_adjustments/README.md)
+(BM3 / MHD, which replace the former BM3 Live app) are experimental too: they send DME
+control / write requests once a tune is picked in Settings (*Tuning software* ships Off).
+Read each app's compatibility notes before use.
+
+The driving dashboards switch to a built-in demo drive on the VM or a bench unit without vehicle data
 after 5 seconds (launch, pull through the gears, a hard stop, corners, an engine warming up from
 cold). A **DEMO** badge shows when the data isn't from the car.
 
@@ -242,8 +275,7 @@ node kit/tools/extract_sdk.js x_call/javascript/app.js     # writes ./oap-sdk/
 
 On Windows the same commands work in PowerShell (scp and tar are built in), with the real file
 name instead of `x_call@*.tgz`.
-Or download it from a public website:
-https://bedrive.ru/da77
+
 
 
 You get:
@@ -265,10 +297,17 @@ too; the tool lists anything missing.
 ```sh
 python3 kit/tools/build.py            # all apps -> dist/<id>@<ver>.mgu
 python3 kit/tools/build.py redline    # just one
+python3 kit/tools/build.py --language zh-CN   # Simplified Chinese -> dist/<id>@<ver>-zh.cn.2.mgu
 node kit/tools/preview.js dist/redline preview wait=10   # render it on the PC -> preview/*.png
 ```
 
 (On Windows type `python` instead of `python3`.)
+
+English is the default. **Chinese:** `--language zh-CN` builds every app in Simplified Chinese
+(the language is fixed at build time; the car's language setting doesn't change it). Installing
+the other language's package swaps it like an update. Chinese translation by 小白151
+([JackieZ123430](https://github.com/JackieZ123430), [idrive7-apps-cn](https://github.com/JackieZ123430/idrive7-apps-cn));
+Chinese guide: [README.zh-CN.md](README.zh-CN.md).
 
 The `.mgu` files contain BMW's SDK, so keep them for your own car and don't publish them.
 
@@ -281,7 +320,11 @@ apps, the installer and the GPU renderer) into `dist/mgu-custom-apps.tar.gz`:
 deploy/make-car-kit.sh                 # macOS / Linux / WSL
 deploy\make-car-kit.cmd                # Windows (cmd or PowerShell)
 python3 kit/tools/make_kit.py redline  # any OS; just some apps
+python3 kit/tools/make_kit.py --language zh-CN   # Chinese kit -> dist/mgu-custom-apps-zh-CN(.tar.gz)
 ```
+
+(For the Chinese kit, give `push-to-car.sh` `KIT=dist/mgu-custom-apps-zh-CN` and `push-to-car.ps1`
+`-Kit dist\mgu-custom-apps-zh-CN.tar.gz`.)
 
 Then push it over SSH. macOS / Linux / WSL:
 
@@ -316,6 +359,12 @@ sh deploy-car.sh status     # installed apps, running state, hook state
 sh deploy-car.sh backups    # list backups
 sh deploy-car.sh restore    # back to stock (asks you to type YES)
 ```
+
+> **Please share this project.** These apps are free and open source, but a lot of people are
+> selling them and claiming they made them. If you paid for them, you were scammed. Help spread
+> the word: share this repository on social media, forums and BMW groups so people can find the
+> free original here:
+> **https://github.com/cauliflowermossgrape/idrive7-apps**
 
 ### 3.4 Doom: the extra steps
 
@@ -547,8 +596,12 @@ the internet.
    from the unit's firmware**, registers the app as preinstalled, and fixes ownership and
    permissions.
 5. **Installs the GPU renderer** `mgu-renderd` (kit/renderd) as a systemd service that starts
-   with the app platform. It runs as a throwaway user with only the compositor, GPU and app
-   groups. If it can't be installed the apps still work, drawn in software.
+   with the app platform. It runs as root in the compositor's group (its foreground gate reads
+   which app is in front over SOME/IP; touch routing for apps that claim touch uses nft).
+   It also makes the **page template** for in-page drawing from the unit's HMI (up to 2 min;
+   mounted from `/run` before each HMI start behind a boot guard, nothing on the partitions is
+   written; `NO_EMBED=1` skips it). How apps use it: [kit/renderd](kit/renderd/README.md#using-it-in-an-app).
+   If it can't be installed the apps still work, drawn in software.
 6. **Sets up the controller gate** `mgu-inputgate.so` to load into the HMI (a systemd drop-in for
    `hmi.service`; other preloads are kept). While a full-screen app asks
    for the controller (Doom while you play), the HMI gets the knob, press and tilt as "untouched",
@@ -580,6 +633,8 @@ Files it touches:
 /var/opt/public/oap/oap_12221 ... oap_12299/              (new) the apps
 /var/opt/mgu-renderd/                                    (new) the GPU renderer
 /etc/systemd/system/mgu-renderd.service                  (new) its service (+ oapcontroller.service.wants link)
+/etc/systemd/system/mgu-renderd-hmi.service              (new) mounts the page template before the HMI (+ hmi.service.wants link)
+/etc/systemd/system/display-bridge*.d/mgu-renderd.conf   (new) display-bridge stands down while the renderer is installed
 /etc/systemd/system/hmi.service.d/zz-mgu-inputgate.conf  (new) loads the controller gate into the HMI
 /etc/systemd/system/mgu-inputgate-guard.service          (new) decides at each start whether it loads
 /etc/systemd/system/mgu-inputgate-check.service          (new) confirms the HMI is healthy with it
@@ -637,11 +692,11 @@ all 33 HMI languages, manifest, permissions and runner.
 |---|---|
 | `loggingId` | 4-character log tag, **unique per app** (BMW apps use `OA1x`, the apps here `OA93`-`OA9F`) |
 | `iconGlyph` | tile icon drawn by `make_icon.js` when the app has no `icon.png`: `gauge`, `flag`, `engine`, `rpm`, `dyno`, `brake`, `temp`, `gforce`, `battery`, `wrench`, `doom`, or up to ~3 letters. An `icon.png` (140 x 140, transparent) in the app folder is used instead: the shipped apps' icons are drawn as SVG in `kit/icons/<app>.svg` and rendered with `python3 kit/tools/render_icons.py` on a transparent background (needs Pillow and Chromium / Chrome; `--sheet out.png` makes a preview, `--tile` puts them on a glass tile) |
-| `signals` | `interface → { field: flags }`; `r` = read once at start (needs a getter), `s` = subscribe to changes (needs a notifier), `w` = write (its setter, `ctx.signals.set`). Optional `_instances`, `_methods`, `_broadcasts` |
+| `signals` | `interface → { field: flags }`; `r` = read once at start (needs a getter), `s` = subscribe to changes (needs a notifier), `w` = write (its setter, `ctx.signals.set`). Optional `_instances`, `_methods`, `_broadcasts`. `"_optional": "<what the app loses>"`: a unit whose firmware lacks this interface still installs the app, without it (the installer and the app's log say what is missing); without `_optional` such a unit refuses the app and `deploy-car.sh` leaves it out |
 | `screens` | `canvas` screens: one big image + up to 4 buttons. `BTN_SETTINGS` opens the settings screen generated from `settings`. `"bar": false`: the kit draws no button bar on that screen and the content gets the full height (a game); the buttons still exist in the HMI under the picture, for controller focus and taps. `"chrome": false`: no header, bar or panels at all, the whole display is the app's (`cv.place.full`). `"kind": "menu"` with `"items"` (`["button", NAME, label]`, `["text", NAME, label]`): an HMI list screen; `"settings": true` adds every setting to it (then no separate settings screen is made) |
 | `assets` | files the build downloads into the app folder and packs, checked by SHA-256: `[{ "file", "sha256", "url" }]`, for a zip also `"zipSha256"`, `"zipMember"` (Doom's game data). `.wasm`, `.wad`, `LICENSE` and `NOTICE` files in the app folder are packed as they are |
 | `settings` | `choice`, `number` (stepped through `steps`) and `bool`, saved in the app's `data/settings.json`. Shown in this order: the app's own settings first, the screen ones (theme, display rate, layout, renderer, demo) last. `"markDefault": true` adds " (default)" to the default's row; `"reset": n` moves every car to the default once when `n` changes (for a new default) |
-| `startWidget` | optional home-screen widget, built as `rhmiDataStartWidget/` the way BMW's own widgets are (Drive Recorder, Weather): `name` (shown in the widget list), `layout` (an HMI widget template, e.g. `LT_Table_OnlineApps_DriveRecorderWidget`), `image` (the template's cell the drawn picture goes into, e.g. `BackgroundImage1`), `size` ([w, h] of that picture; the HMI scales it to the big widget and crops it centred; 384 x 256 fits the G05) and `cells` (`{cell: [value, type]}` written once per placed widget). The app draws with `ctx.widget.loop(fps, (inst) => canvas)`, writes other cells with `ctx.widget.set(spawnId, cell, value, type)`; a tap opens the app. See `apps/edrive2` |
+| `startWidget` | optional home-screen widget, built as `rhmiDataStartWidget/` the way BMW's own widgets are (Drive Recorder, Weather): `name` (shown in the widget list), `layout` (an HMI widget template, e.g. `LT_Table_OnlineApps_DriveRecorderWidget`), `image` (the template's cell the drawn picture goes into, e.g. `BackgroundImage1`), `size` ([w, h] of that picture; the HMI scales it to the big widget and crops it centred; 384 x 256 fits the G05) and `cells` (`{cell: [value, type]}` written once per placed widget). The app draws with `ctx.widget.loop(fps, (inst) => canvas)`, writes other cells with `ctx.widget.set(spawnId, cell, value, type)`; a tap opens the app. See `apps/edrive` (live.js) |
 
 **Check your flags against the catalog.** The unit's installer refuses `r` on a field without a
 getter (some getters have id 0, which also counts as missing). Copy the catalog from your unit
@@ -687,10 +742,11 @@ mgu.run({
 |---|---|
 | `ctx.ui` | `image(name, canvas)`, `text(name, str)`, `visible(name, on)`, `checked(name, on)`, `rows(name, n)`, `onClick(name, fn)` |
 | `ctx.settings` | `get(key)`, `onChange(fn)` |
-| `ctx.canvas(w, h)` | the surface to draw one frame on (reused; pass it to `ui.image`). Use 1600 x 520: page tabs via `G.frame`, page content between `G.TOP` (44) and `G.BOTTOM` (512) |
+| `ctx.canvas(w, h)` | the surface to draw one frame on (reused; pass it to `ui.image`). Use 1600 x 520: page tabs via `G.frame`, page content between `G.TOP` (44) and `G.BOTTOM` (512). Where the kit runs the screen with no bar under the page, the screen has room below the page: `G.pageBottom(cv)` is `G.BOTTOM` plus that room (`cv.extra`, else 0), and `G.panel` stretches a panel that ends at the page's bottom down to it and returns the rect it drew (`G.stat` and `G.segBar` follow it), so a chart or list can use the real height. A page that reads `cv.extra` (or `G.pageBottom`, or has such a panel) starts where it does over the slim bar; any other page is centred in the room |
 | `ctx.loop(screen, fps, fn)` | render loop that runs only while that screen is shown: once per display refresh with the GPU renderer, `fps` times a second without; returns `{stop()}` |
 | `ctx.theme()` | current colour theme (`bg`, `text`, `dim`, `accent`, `warn`, `crit`, `cold`, ...) |
 | `ctx.signals` | raw SOME/IP access: `watch(iface, instance, handlers)`, `proxy`, `call`, `set(proxy, field, value)` (needs `w`) |
+| `require('./kit/parked')` | `watch(ctx, log)` -> `{ moving(), speed() }`: is the car driving (above 3 km/h)? For games and anything that mustn't run while driving. A quiet speed signal keeps the last reading (parked stays parked, driving stays driving); no speed at all (VM, bench) = parked. Needs `Vehicle2.statusCarSpeed2` ("rs"). **Every game has a bool setting `parkedOnly`, on by default**, and pauses while `moving()` |
 | `ctx.controller` | `grab(on)`: the iDrive controller's knob, press and tilt go to this app only while it is shown (the HMI stops reacting to them; BACK, MENU and touch still work). `onInput(fn)`: fn gets each held-back event (`frontRotaryEncoderOperation`, `frontRotaryEncoderPushButton`, `frontRotaryEncoderDeflection`, numbers as in FrontCCU). Needs the GPU renderer and the controller gate (5.1) |
 | `ctx.log` | `info/warn/error` → system log + `data/<id>.log` |
 | `ctx.dataDir` | the app's writable folder (persistent) |
@@ -742,6 +798,58 @@ all and encodes a GIF (needs Docker and ffmpeg):
 kit/tools/make_gif.sh docs/media/redline.gif redline 6 6 --set coldGuard=false   # 6 s, after 6 s of demo drive
 ```
 
+### 6.4 Live emulator
+
+<p align="center">
+  <img src="docs/media/emulator-redline.png" alt="The live emulator: Redline drawn by the car's own draw engine in the browser, the panel at the bottom" width="100%"><br>
+  <sub>Redline in the emulator. The full guide, with more screenshots: <a href="docs/emulator.md">docs/emulator.md</a>.</sub>
+</p>
+
+```sh
+node kit/tools/emu.js redline                  # -> http://localhost:8077
+node kit/tools/emu.js doom --port 8080 --bg hmi-screenshot.png
+node kit/tools/emu.js car_vitals --no-touch    # a renderer without touch routing
+```
+
+`emu.js` builds the app, runs it live with the real runtime on a stubbed head unit, and plays the
+part of the GPU renderer: the page draws every frame with the car's own draw engine
+(`kit/renderd/src/gfx.c` compiled to WebAssembly, `kit/emu/web/gfx/`) at up to 60 fps. The app
+gets its ticks, touch and controller as `mgu-render` gives them on the car, so the kit runs the
+screen itself: header tabs, slim bar, the settings sheet, scrolling. Save a file under
+`apps/<id>/` or `kit/runtime/` and the app is built and restarted while the page stays open; a
+build that fails is shown on the page, and the last good build keeps running. The server answers this
+computer only (127.0.0.1), and only pages it serves itself.
+
+| Input | Does |
+|---|---|
+| mouse on the screen | touch (a tap outside the app's claims goes to the "HMI": the home icon is HOME, the back arrow BACK) |
+| mouse wheel, `[` `]` | turn the iDrive knob |
+| `Enter` | press the knob |
+| arrow keys | push it up / right / down / left |
+| `Backspace`, `H`, `O` | BACK, HOME, open the app again |
+
+The side panel switches the app, shows the log and the renderer's numbers, changes the app's
+settings live (saved in `preview/emu/<id>/`), and feeds the vehicle signals: **Demo drive**
+(`sim.js`, setting `demo` on) or **Manual** sliders, sent as raw values (section 7) so that
+`car.js` scales them as in the car. Menu screens and the HMI's bar buttons (Doom's menu, the
+standard layout) are buttons in the panel. The panel docks left, right or at the bottom (its own control, or
+`?panel=left|right|bottom`); narrow windows put it at the bottom.
+
+BACK on the app's last screen, or HOME, leaves the app for the HMI's app list ("Installed Apps",
+drawn by the page as on the car): the app keeps running hidden, as on the car, and a rebuild keeps it
+there. Its tile opens it again; another app's tile starts that one. On the car HOME goes to the main
+menu; the app list stands in for it here.
+
+**Touch routing** (the panel's switch, or `--no-touch` at start) picks the renderer. On, as the
+Store's `mgu-render`: the kit runs the screen, with tabs and page buttons and no bar. Off, as a
+renderer without it: the kit draws the slim bar over the HMI's own buttons, as in
+[docs/screens](docs/screens); taps and the controller's focus go to those buttons, and tabs can't be tapped.
+
+Limits: of the BMW HMI only its frame around the app (home icon, back arrow, status corner) and the
+app list are drawn; its popups, main menu and own settings screen are not (the panel stands in). Frame times are your computer's GPU and CPU, not the car's. Signals come at
+20 Hz without the car's timing or gaps, and nothing answers diagnostics (UDS) or other SOME/IP
+calls. A large app such as Doom takes a few seconds to build.
+
 ---
 
 ## 7. Vehicle signals reference
@@ -773,6 +881,12 @@ explore it.
   there) and `sh deploy-car.sh status`.
 - **An app vanished after crashing.** That's MainApp's crash handler (4.3). Fix the crash, then
   run `install` again.
+- **The tiles are there but no app opens; the log says "the SDK created no RHMI application".**
+  The SDK made no screens for the app. An SDK extracted from a newer donor app (SDK 27.x) only
+  makes them with `rhmiLoadingEnabled` on, and some donors ship it off: apps built before this
+  fix crashed on that (issue #39). Rebuild and reinstall: `build.py` now turns it on in every
+  app's config. The `SDK_INFO` / `SDK_WARN` lines above it give the cause otherwise. Apps that
+  had already crashed may need a head-unit restart before taps reach them again.
 - **Never `kill` an app process.** Restart the platform instead:
   `systemctl restart oapcontroller` (the HMI's app list reloads).
 - **A removed app's tile is still shown.** The HMI caches tiles. `restore` handles this by
@@ -811,16 +925,23 @@ apps/doom/            Doom: doom-core.js (WebAssembly runner, files over Node fs
 kit/runtime/          app runtime: mgu.js (platform glue), record.js + display.js + renderd.js
                       (GPU path), canvas.js (software path), gauges.js, themes.js,
                       car.js (signals + demo), sim.js (demo drive), signals.js (SOME/IP),
-                      diag.js (UDS over TASU), fonts/
-kit/renderd/          mgu-renderd: the GPU renderer service (C, GLES2, Wayland/ivi);
-                      prebuilt/ = the ready binary + the source fingerprint it was built from
+                      diag.js (UDS over TASU), readonly-diag.js (the same, reading only),
+                      sgbd.js (replies -> values with an SGBD catalog), ecus.js, fonts/
+kit/renderd/          mgu-renderd: the GPU renderer service (mgu-render: C, GLES2, Wayland/ivi),
+                      GPL-3.0-or-later; prebuilt/ = the ready binary + the source fingerprint it
+                      was built from; inputgate/ = the controller gate
 kit/platform/         permissions template used by build.py
-kit/tools/            build.py, make_kit.py, preview.js, make_gif.sh, make_icon.js, render_icons.py,
-                      bake_fonts.py, extract_sdk.js, check_signals.py, sigdoc.py, oapgen/gen.js
+kit/tools/            build.py, make_kit.py, preview.js, emu.js + hu-stub.js (the live emulator),
+                      make_gif.sh, make_icon.js, render_icons.py, bake_fonts.py, extract_sdk.js,
+                      check_signals.py, sigdoc.py, oapgen/gen.js, sgbd_catalog.py (Live Data
+                      catalogs), test_live_data.js
+kit/emu/              the emulator's page (web/) and the draw engine as WebAssembly (web/gfx/, built
+                      from wasm/ with build.sh), GPL-3.0-or-later for the engine's build
 kit/icons/            the apps' tile icons as SVG (render_icons.py -> apps/<app>/icon.png)
 deploy/               make-car-kit.sh/.cmd, push-to-car.sh/.ps1, mgu-app-install.sh, mainapp-patch.js
 deploy/car/           deploy-car.sh (runs on the unit) + its README
-docs/                 RHMI widget reference, screenshots (docs/screens), animations (docs/media)
+docs/                 RHMI widget reference, the emulator guide (emulator.md), screenshots
+                      (docs/screens), animations and emulator screenshots (docs/media)
 third_party/doomgeneric/  Doom's engine source (GPL-2.0) with the changes for the app (mgu.patch,
                       MGU.md) and build.sh, which builds apps/doom/doom.wasm
 ```
@@ -835,9 +956,16 @@ Not in the repository, on purpose:
 BMW's interface generator (needed at install time) is likewise **loaded from the unit's own
 firmware** by `kit/tools/oapgen/gen.js`, so no BMW code is shipped here.
 
-### Doom licences
+### Doom and renderer licences
 
-The repository is MIT-licensed, except the Doom app: `apps/doom` contains `doom.wasm`, the
+The repository is MIT-licensed, except two parts. The GPU renderer, `kit/renderd`, is
+[mgu-render](https://github.com/robertnisipeanu/mgu-store) by Robert Nisipeanu and IterioDev,
+GPL-3.0-or-later (`kit/renderd/LICENSE`); the parts it took from this repository's first renderer
+stay MIT too (`kit/renderd/LICENSE.mgu-renderd`), and the controller gate in
+`kit/renderd/inputgate` is MIT. It runs as its own program, so the apps that talk to it over its
+socket stay MIT. The emulator's build of its draw engine, `kit/emu/wasm` and `kit/emu/web/gfx`
+(WebAssembly, section 6.4), contains its code, so it is GPL-3.0-or-later too; the rest of the
+emulator, which only feeds it the socket's bytes, stays MIT. The other is the Doom app: `apps/doom` contains `doom.wasm`, the
 [doomgeneric](https://github.com/ozkl/doomgeneric) engine (GPL-2.0) compiled to WebAssembly, so
 the app as a whole is distributed under the GPL-2.0 (`apps/doom/LICENSE`, `apps/doom/NOTICE`).
 Its complete source, with the changes made for the app, is in `third_party/doomgeneric`;

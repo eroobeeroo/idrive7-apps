@@ -25,15 +25,20 @@ BUILT = os.path.join(RENDERD, 'build', 'mgu-renderd')
 PRE_DIR = os.path.join(RENDERD, 'prebuilt')
 PRE = os.path.join(PRE_DIR, 'mgu-renderd')
 PRE_SUM = os.path.join(PRE_DIR, 'SOURCE_SHA256')
+# the renderer's script files, shipped beside it (kit and prebuilt/, which the Store installs from):
+# the foreground gate it starts, the HMI page template's generator, mount script and boot guard, its licences
+RENDERD_FILES = [('js/foreground_gate.js', 'foreground_gate.js'), ('js/hmi_template.js', 'hmi_template.js'),
+                 ('systemd/mgu-render-hmi.sh', 'mgu-render-hmi.sh'), ('systemd/mgu-render-hmi-guard.sh', 'mgu-render-hmi-guard.sh'),
+                 ('LICENSE', 'LICENSE'), ('LICENSE.mgu-renderd', 'LICENSE.mgu-renderd')]
 # files copied next to the apps; text, so always shipped with Unix line endings
 CAR_FILES = [('car/deploy-car.sh', 'deploy-car.sh'), ('mgu-app-install.sh', 'mgu-app-install.sh'),
              ('mainapp-patch.js', 'mainapp-patch.js'), ('car/README.txt', 'README.txt')]
 
 
-def source_hash():
+def source_hash(parts=(('src', None), ('inputgate', ('.cpp',)), ('protocol', ('.xml',)), ('docker', None), ('', ('Makefile',)))):
     """Fingerprint of everything the renderer binary is built from (line endings ignored)."""
     files = []
-    for sub, exts in (('src', None), ('inputgate', ('.cpp',)), ('protocol', ('.xml',)), ('docker', None), ('', ('Makefile',))):
+    for sub, exts in parts:
         d = os.path.join(RENDERD, sub)
         for n in sorted(os.listdir(d)):
             p = os.path.join(d, n)
@@ -52,7 +57,8 @@ def prebuilt_hash():
 
 
 def docker_build():
-    """Compile kit/renderd in Docker (x86-64 like the head unit). Returns (ok, output)."""
+    """Compile kit/renderd in Docker (x86-64 like the head unit). Returns (ok, output, stale): stale = built in an
+    image that could not be made again from this docker/."""
     plat = ['--platform', 'linux/amd64']
     user = ['-u', '%d:%d' % (os.getuid(), os.getgid())] if hasattr(os, 'getuid') else []
     log = []
@@ -60,10 +66,20 @@ def docker_build():
         p = subprocess.run(cmd, cwd=RENDERD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         log.append(p.stdout.decode('utf-8', 'replace'))
         return p.returncode == 0
-    ok = (run(['docker', 'image', 'inspect', 'mgu-renderd-build'])
-          or run(['docker', 'build'] + plat + ['-t', 'mgu-renderd-build', 'docker']))
+    # the image is made again when docker/ changed: its label holds the docker/ it was built from
+    tag = source_hash((('docker', None),))
+    p = subprocess.run(['docker', 'image', 'inspect', '-f', '{{index .Config.Labels "mgu-renderd.docker"}}', 'mgu-renderd-build'],
+                       cwd=RENDERD, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    have = p.stdout.decode('utf-8', 'replace').strip()
+    ok = have == tag or run(['docker', 'build'] + plat + ['--label', 'mgu-renderd.docker=' + tag, '-t', 'mgu-renderd-build', 'docker'])
+    stale = False
+    if not ok and p.returncode == 0:
+        # offline, or the base image gone: the image there still builds the renderer (one without the label
+        # predates it, its docker/ may well be the same)
+        print('   (could not rebuild the build image; using the existing one, made from an older or unknown docker/)')
+        ok = stale = True
     ok = ok and run(['docker', 'run', '--rm'] + plat + user + ['-v', RENDERD + ':/src', 'mgu-renderd-build', 'make'])
-    return ok and os.path.isfile(BUILT), ''.join(log)
+    return ok and os.path.isfile(BUILT), ''.join(log), stale
 
 
 def ask(why, fallback):
@@ -84,9 +100,14 @@ def pick_renderer():
     pre_ok = os.path.isfile(PRE) and have == want
     older = PRE if os.path.isfile(PRE) else None
     if shutil.which('docker'):
-        ok, log = docker_build()
+        ok, log, stale = docker_build()
         if ok:
-            if not pre_ok:
+            if not pre_ok and stale:
+                # prebuilt/ would claim this docker/ (SOURCE_SHA256) and no later run would make it again
+                print('\n'.join(log.strip().splitlines()[-15:]))
+                print('renderer: built in the older build image - kit/renderd/prebuilt/ NOT updated '
+                      '(fix the image build above, then run again)')
+            elif not pre_ok:
                 os.makedirs(PRE_DIR, exist_ok=True)
                 shutil.copyfile(BUILT, PRE)
                 shutil.copyfile(gate_of(BUILT), gate_of(PRE))
@@ -109,6 +130,18 @@ def pick_renderer():
     return ask('No prebuilt renderer and no Docker to build one (see kit/renderd/README.md).', None)
 
 
+def renderd_files(dest):
+    """the renderer's script files into dest (Unix line endings); the names that changed"""
+    changed = []
+    for src, dst in RENDERD_FILES:
+        data = open(os.path.join(RENDERD, src), 'rb').read().replace(b'\r\n', b'\n')
+        p = os.path.join(dest, dst)
+        if not os.path.isfile(p) or open(p, 'rb').read() != data:
+            open(p, 'wb').write(data)
+            changed.append(dst)
+    return changed
+
+
 def gate_of(rd):
     """the controller gate (mgu-inputgate.so, loaded into the HMI) built next to the renderer"""
     return os.path.join(os.path.dirname(rd), 'mgu-inputgate.so')
@@ -122,16 +155,27 @@ def md5(p):
 
 
 def main():
-    apps = sys.argv[1:] or sorted(d for d in os.listdir(os.path.join(ROOT, 'apps'))
+    import argparse
+    from localize import languages, package_version
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--language', choices=languages(), default='en')
+    parser.add_argument('apps', nargs='*')
+    args = parser.parse_args()
+    # English (the default) keeps the usual dist/mgu-custom-apps(.tar.gz); other languages get a suffix
+    name = 'mgu-custom-apps' + ('' if args.language == 'en' else '-' + args.language)
+    OUT = os.path.join(DIST, name)
+    archive = os.path.join(DIST, name + '.tar.gz')
+    apps = args.apps or sorted(d for d in os.listdir(os.path.join(ROOT, 'apps'))
                                   if os.path.isfile(os.path.join(ROOT, 'apps', d, 'app.json')))
     rd = pick_renderer()
 
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(os.path.join(OUT, 'apps'))
     for app in apps:
-        r = subprocess.run([sys.executable, os.path.join(ROOT, 'kit', 'tools', 'build.py'), app], cwd=ROOT)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, 'kit', 'tools', 'build.py'), '--language', args.language, app], cwd=ROOT)
         if r.returncode: sys.exit('build of %s failed' % app)
         ver = json.load(open(os.path.join(ROOT, 'apps', app, 'app.json'), encoding='utf-8'))['version']
+        ver = package_version(ver, args.language)
         shutil.copyfile(os.path.join(DIST, '%s@%s.mgu' % (app, ver)), os.path.join(OUT, 'apps', '%s@%s.mgu' % (app, ver)))
     for src, dst in CAR_FILES:
         data = open(os.path.join(DEPLOY, src), 'rb').read().replace(b'\r\n', b'\n')
@@ -140,9 +184,13 @@ def main():
     if rd: shutil.copyfile(rd, os.path.join(OUT, 'mgu-renderd'))
     if gate: shutil.copyfile(gate_of(rd), os.path.join(OUT, 'mgu-inputgate.so'))
     if not rd: print('note: no mgu-renderd in the kit - the apps install with software rendering only')
+    if rd:
+        renderd_files(OUT)
+        if renderd_files(PRE_DIR): print('renderer: script files changed - updated kit/renderd/prebuilt/ (commit it)')
 
     names = ['deploy-car.sh', 'mgu-app-install.sh', 'mainapp-patch.js'] + \
-            ['apps/' + n for n in sorted(os.listdir(os.path.join(OUT, 'apps')))] + (['mgu-renderd'] if rd else []) + (['mgu-inputgate.so'] if gate else [])
+            ['apps/' + n for n in sorted(os.listdir(os.path.join(OUT, 'apps')))] + (['mgu-renderd'] if rd else []) + (['mgu-inputgate.so'] if gate else []) + \
+            ([d for _, d in RENDERD_FILES] if rd else [])
     with open(os.path.join(OUT, 'KIT_SUMS'), 'w', encoding='utf-8', newline='\n') as f:
         for n in names: f.write('%s  %s\n' % (md5(os.path.join(OUT, n)), n))
 
@@ -151,14 +199,14 @@ def main():
         ti.uid = ti.gid = 0; ti.uname = ti.gname = 'root'
         ti.mode = 0o755 if ti.isdir() or ti.name.endswith(('.sh', '/mgu-renderd', '.so')) else 0o644
         return ti
-    with tarfile.open(os.path.join(DIST, 'mgu-custom-apps.tar.gz'), 'w:gz') as tf:
+    with tarfile.open(archive, 'w:gz') as tf:
         tf.add(OUT, arcname='mgu-custom-apps', filter=mode)
     if hasattr(os, 'chmod'):
         for n in ('deploy-car.sh', 'mgu-app-install.sh') + (('mgu-renderd',) if rd else ()):
             os.chmod(os.path.join(OUT, n), 0o755)
     shutil.copyfile(os.path.join(DEPLOY, 'push-to-car.ps1'), os.path.join(DIST, 'push-to-car.ps1'))  # Windows: next to the .tar.gz
     print('kit: %s  (%s)' % (OUT, ' '.join(sorted(os.listdir(os.path.join(OUT, 'apps'))))))
-    print('     %s' % os.path.join(DIST, 'mgu-custom-apps.tar.gz'))
+    print('     %s' % archive)
 
 
 if __name__ == '__main__':

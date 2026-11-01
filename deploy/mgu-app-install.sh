@@ -15,8 +15,15 @@
 #                                                       provisioning hook (see below)
 #   sh mgu-app-install.sh unpatch                       back to stock MainApp
 #   sh mgu-app-install.sh renderd [--persist]           install / start the GPU renderer
-#                                                       (mgu-renderd next to this script)
+#                                                       (mgu-renderd next to this script);
+#                                                       --persist: with in-page drawing too
+#                                                       (NO_EMBED=1: without)
 #   sh mgu-app-install.sh renderd-remove                stop and remove it
+#   sh mgu-app-install.sh renderd-embed [--now]         (re)make the HMI page template for in-page
+#                                                       drawing (renderd --persist does it too); from
+#                                                       the next head-unit start (--now: restart the
+#                                                       HMI now, VM / bench only)
+#   sh mgu-app-install.sh renderd-embed-remove [--now]  take the page template out again
 #   sh mgu-app-install.sh inputgate [--now]             let full-screen apps (Doom) have the iDrive
 #                                                       controller (mgu-inputgate.so in the HMI).
 #                                                       Loads at the next head-unit start; a boot
@@ -64,7 +71,7 @@ MAIN=$OAP/oap_12201
 UIDS=$MAIN/security/uids.txt
 REG=$MAIN/data/apps
 CUSTOM=$MAIN/data/custom_apps.json
-CATALOG=/etc/oap/someip/someip-interfaces.json
+CATALOG=${CATALOG:-/etc/oap/someip/someip-interfaces.json}   # the unit's SOME/IP interface catalog
 MAINJS=/usr/lib/oap-mainapp/src/main.js
 PATCH_DIR=$OAP/_mgu_custom
 DROPIN=/etc/systemd/system/oapcontroller.service.d/50-mgu-custom-apps.conf
@@ -72,6 +79,13 @@ NODE=${NODE:-/usr/bin/node}
 # GPU renderer (kit/renderd): apps draw through it at 60 fps when it runs, else in software
 RENDERD_DIR=/var/opt/mgu-renderd
 RENDERD_UNIT=mgu-renderd.service
+RENDERD_FILES="foreground_gate.js hmi_template.js mgu-render-hmi.sh mgu-render-hmi-guard.sh LICENSE LICENSE.mgu-renderd"
+# in-page drawing: the page template's unit and its files in /run (apart from mgu-store's mgu-render)
+EMBED_UNIT=mgu-renderd-hmi.service
+EMBED_RUN=/run/mgu-renderd-hmi
+# display-bridge (mgu-apps) stands down while this renderer is installed: one page template, one embed provider
+DBR_UNITS="display-bridge.socket display-bridge.service display-bridge-hmi.service"
+DBR_DROPIN=mgu-renderd.conf
 # controller gate for full-screen apps (kit/renderd/inputgate): preloaded into the HMI
 GATE_SO=$RENDERD_DIR/mgu-inputgate.so
 GATE_DROPIN_NAME=hmi.service.d/zz-mgu-inputgate.conf
@@ -85,10 +99,16 @@ BACKUP_ROOT=${BACKUP_ROOT:-$SELF_DIR/backups}
 TMP=${TMPDIR:-/tmp}/mgu-app-install.$$
 CHANGED=0
 NEED_RESTART=0
+DONE_RESTART=0         # install: the apps already installed need the restart (an error later says so)
 
 say()  { echo "[mgu-app] $*"; }
 warn() { echo "[mgu-app] WARNING: $*" >&2; }
-die()  { echo "[mgu-app] ERROR: $*" >&2; rm -rf "$TMP"; exit 1; }
+die()  {
+    echo "[mgu-app] ERROR: $*" >&2; rm -rf "$TMP"
+    # not restarted here: the app that failed may be an update half replaced (it would start broken)
+    [ $DONE_RESTART = 1 ] && echo "[mgu-app] the apps installed before this error are kept; they start after: sh $0 apply" >&2
+    exit 1
+}
 
 [ "$(id -u)" = 0 ] || die "run as root"
 [ -d "$MAIN" ] || die "$MAIN not found - is this an MGU with the OAP platform (and /var/opt/public mounted)?"
@@ -96,10 +116,10 @@ die()  { echo "[mgu-app] ERROR: $*" >&2; rm -rf "$TMP"; exit 1; }
 [ -x "$NODE" ] || die "node not found at $NODE"
 
 uid_of() {      # app id -> uid from uids.txt
-    sed -n "s/^\([0-9]*\)=$1\$/\1/p" "$UIDS" | head -1
+    sed -n "s/^\([0-9]*\)=$1\$/\1/p" "$UIDS" | head -n 1
 }
 app_of() {      # uid -> app id
-    sed -n "s/^$1=\(.*\)\$/\1/p" "$UIDS" | head -1
+    sed -n "s/^$1=\(.*\)\$/\1/p" "$UIDS" | head -n 1
 }
 # is_ours <id> <uid>: an app this tool installed (listed in custom_apps.json or built with
 # the kit). Not decided by uid: MainApp can give its own apps any uid in the range too.
@@ -120,8 +140,8 @@ backup() {
     ts=$(date +%Y%m%d-%H%M%S)
     B=$BACKUP_ROOT/$ts
     mkdir -p "$B" || die "cannot create backup dir $B"
-    cp -p "$UIDS" "$B/uids.txt"
-    tar czf "$B/registry.tgz" -C "$MAIN/data" apps 2>/dev/null
+    cp -p "$UIDS" "$B/uids.txt" || die "cannot back up $UIDS - nothing changed"
+    tar czf "$B/registry.tgz" -C "$MAIN/data" apps || die "cannot back up $REG - nothing changed"
     [ -f "$CUSTOM" ] && cp -p "$CUSTOM" "$B/custom_apps.json"
     echo "$B" > "$BACKUP_ROOT/latest"
     say "backup: $B"
@@ -233,6 +253,29 @@ gen() {
     return 1
 }
 
+# optional_missing <unpacked dir>: app.json signals marked "_optional" (meta.json "optional")
+# that this unit's catalog does not have are taken out of the app's manifest, so BMW's generator
+# accepts it; the app then runs without them. Says what is missing and leaves
+# source/javascript/kit/missing-interfaces.json, which the app logs when it starts.
+# Any other missing interface still makes the generator refuse the app.
+optional_missing() {
+    "$NODE" -e '
+        const fs = require("fs"), [dir, catalog] = process.argv.slice(1);
+        const meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        const opt = meta.optional || {};
+        if (!Object.keys(opt).length) process.exit(0);
+        const have = JSON.parse(fs.readFileSync(catalog, "utf8")).interfaces || {};
+        const mf = dir + "/source/manifest.json", m = JSON.parse(fs.readFileSync(mf, "utf8"));
+        const missing = {};
+        for (const i of Object.keys(opt)) if (!have[i]) { missing[i] = opt[i]; delete m.proxies[i]; }
+        if (!Object.keys(missing).length) process.exit(0);
+        fs.writeFileSync(mf, JSON.stringify(m, null, 1));
+        fs.writeFileSync(dir + "/source/javascript/kit/missing-interfaces.json", JSON.stringify(missing, null, 1));
+        for (const i of Object.keys(missing))
+            console.error("[mgu-app] WARNING: " + meta.id + ": this unit has no " + i + " - installed without it: " + missing[i]);
+    ' "$1" "$CATALOG"
+}
+
 # verify_one <app.mgu>: would install_one's interface generation pass on this unit? Only $TMP is
 # written. Returns 1 (with the generator's reason) if not.
 verify_one() {
@@ -244,6 +287,7 @@ verify_one() {
         || die "$pkg is not an MGU app bundle"
     id=$("$NODE" -e "process.stdout.write(require('$TMP/meta.json').id)")
     ver=$("$NODE" -e "process.stdout.write(require('$TMP/meta.json').version)")
+    optional_missing "$TMP" || die "cannot read $pkg or $CATALOG"
     u=$(uid_of "$id"); [ -n "$u" ] || u=$FIRST_UID
     if gen "$TMP/source/manifest.json" "$u" "$TMP/out"; then
         say "$id $ver: accepted"; rm -rf "$TMP"; return 0
@@ -261,6 +305,7 @@ install_one() {
     id=$("$NODE" -e "process.stdout.write(require('$TMP/meta.json').id)")
     ver=$("$NODE" -e "process.stdout.write(require('$TMP/meta.json').version)")
     case "$id" in ''|*[!a-zA-Z0-9_-]*) die "bad app id '$id'";; esac
+    optional_missing "$TMP" || die "cannot read $pkg or $CATALOG"
 
     u=$(uid_of "$id")
     if [ -n "$u" ]; then
@@ -339,11 +384,16 @@ install_one() {
     rm -rf "$TMP"
 }
 
+uninstall_check() {    # <id>: dies unless it is installed and ours; sets u
+    u=$(uid_of "$1")
+    [ -n "$u" ] || die "$1 is not installed"
+    is_ours "$1" "$u" || die "$1 is a BMW app (uid $u); this tool only removes apps it installed"
+}
+
 uninstall_one() {
     id=$1
-    u=$(uid_of "$id")
-    [ -n "$u" ] || die "$id is not installed"
-    is_ours "$id" "$u" || die "$id is a BMW app (uid $u); this tool only removes apps it installed"
+    # checked (uninstall_check) before the platform stopped: nothing here may die, the platform must start again
+    u=$(uid_of "$id"); [ -n "$u" ] || return 0      # (an id given twice: gone already)
     sed -i "/^$u=$id\$/d" "$UIDS"
     rm -f "$REG/$id.json"
     custom_list del "$id"
@@ -358,7 +408,7 @@ list_apps() {
     printf '%-6s %-24s %-10s %-11s %s\n' UID APP VERSION SOURCE STATE
     sed 's/\r//' "$UIDS" | while IFS='=' read -r u id || [ -n "$u" ]; do
         [ -n "$u" ] || continue
-        v=$(sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p' "$OAP/oap_$u/source/package.json" 2>/dev/null | head -1)
+        v=$(sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p' "$OAP/oap_$u/source/package.json" 2>/dev/null | head -n 1)
         src=$(sed -n 's/.*"installationSource":"\([A-Z]*\)".*/\1/p' "$REG/$id.json" 2>/dev/null)
         st=stopped
         for p in $(pidof node 2>/dev/null); do
@@ -374,7 +424,7 @@ status_one() {
     [ -n "$u" ] || die "$id is not installed"
     list_apps | sed -n "1p;/ $id /p"
     echo "--- crash history (MainApp):"
-    grep -o "\"name\":\"$id\"[^}]*" "$MAIN/data/diagOapStartStopStatus.json" 2>/dev/null | tail -5 || true
+    grep -o "\"name\":\"$id\"[^}]*" "$MAIN/data/diagOapStartStopStatus.json" 2>/dev/null | tail -n 5 || true
     echo "--- app log ($OAP/oap_$u/data/$id.log):"
     tail -n 25 "$OAP/oap_$u/data/$id.log" 2>/dev/null || echo "(none yet - the app writes it once started)"
 }
@@ -383,6 +433,7 @@ restore() {
     B=${1:-}
     [ -n "$B" ] || B=$(cat "$BACKUP_ROOT/latest" 2>/dev/null)
     [ -n "$B" ] && [ -f "$B/uids.txt" ] || die "no backup found (looked in $BACKUP_ROOT)"
+    tar tzf "$B/registry.tgz" >/dev/null || die "$B/registry.tgz is damaged - nothing restored"
     say "restoring registry from $B"
     # remove app dirs that the backup did not know about (installed after it)
     sed 's/\r//' "$UIDS" | while IFS='=' read -r u id || [ -n "$u" ]; do
@@ -401,20 +452,26 @@ renderd_unit() {   # the unit file text
     cat <<UNIT
 # added by mgu-app-install.sh - GPU renderer for the custom apps (remove: sh mgu-app-install.sh renderd-remove)
 [Unit]
-Description=mgu-renderd (GPU renderer for custom apps)
+Description=mgu-renderd (GPU renderer for custom apps: mgu-render)
 After=winston.service
 StartLimitIntervalSec=0
 
 [Service]
-# its own throwaway user: only the compositor (mgu_wayland), the GPU (video) and the apps' group
-DynamicUser=yes
-SupplementaryGroups=mgu_wayland video tm_oap_app
+# root for the touch divert (nft) and the foreground gate (SOME/IP as root), in the compositor's group
+User=root
+Group=mgu_wayland
 Environment=XDG_RUNTIME_DIR=/run/wayland
 RuntimeDirectory=mgu-renderd
 RuntimeDirectoryMode=0755
-ExecStart=$RENDERD_DIR/mgu-renderd --group $APP_GID
+ExecStartPre=/bin/sh -c 'until [ -S /run/wayland/wayland-0 ]; do sleep 1; done'
+ExecStart=$RENDERD_DIR/mgu-renderd -s socket_path=/run/mgu-renderd/renderd.sock -s socket_group=$APP_GID -s embed_marker=$EMBED_RUN/hmi-template -s touch_area=84,0,1836,720
+# touch_area: apps may claim the title strip too (the kit's page tabs are there); only what an app claims is its
+# a stopped renderer leaves no touch divert behind (only its own table)
+ExecStopPost=-/bin/sh -c 'nft delete table ip idrive7_render 2>/dev/null; true'
 Restart=always
 RestartSec=3
+TimeoutStartSec=150
+TimeoutStopSec=5
 
 [Install]
 WantedBy=oapcontroller.service
@@ -429,14 +486,37 @@ rootfs_rw_do() {   # run "$@" with / writable (remounts rw only if it has to)
     return $r
 }
 
+# This repository's renderer installed earlier through mgu-store (tool idrive7-renderd): one of ours is
+# enough, two fight over the socket and the controller. Removed through the Store's own deploy tool, so the
+# Store knows it is gone (it can be installed from the Store again later: it then takes this one over).
+retire_store_renderer() {
+    [ -e /var/opt/idrive7-renderd/current ] || [ -e /etc/systemd/system/idrive7-renderd.service ] || return 0
+    if [ -f /var/opt/mgu-deploy/mgu-deploy.sh ]; then
+        say "removing the renderer installed through the Store (idrive7-renderd): this one replaces it"
+        if sh /var/opt/mgu-deploy/mgu-deploy.sh uninstall idrive7-renderd --yes > "$TMP.dep" 2>&1; then
+            rm -f "$TMP.dep"; return 0
+        fi
+        sed 's/^/    /' "$TMP.dep" >&2; rm -f "$TMP.dep"
+    fi
+    die "the Store's idrive7-renderd is installed and could not be removed: remove it in the Store, then run this again"
+}
+
 install_renderd() {
     src=$SELF_DIR/mgu-renderd
     [ -f "$src" ] || die "mgu-renderd not found next to $0"
+    retire_store_renderer
     # everything is put in place first and the running renderer is restarted only at the end, in
     # one step (the apps draw in software only for those few seconds); unchanged: not restarted
     same=0; cmp -s "$src" "$RENDERD_DIR/mgu-renderd" 2>/dev/null && same=1
     # a running binary can be replaced by rename: the old process keeps its copy until restarted
     mkdir -p "$RENDERD_DIR" && cp "$src" "$RENDERD_DIR/mgu-renderd.new" && mv "$RENDERD_DIR/mgu-renderd.new" "$RENDERD_DIR/mgu-renderd" || die "copy failed"
+    # its script files: the foreground gate it starts (shows an app only while its screen is in front),
+    # and the page template's generator and mount script (renderd-embed)
+    for f in $RENDERD_FILES; do
+        [ -f "$SELF_DIR/$f" ] || continue
+        cmp -s "$SELF_DIR/$f" "$RENDERD_DIR/$f" || { [ "$f" = foreground_gate.js ] && same=0; }
+        cp "$SELF_DIR/$f" "$RENDERD_DIR/$f" || die "copy failed"
+    done
     chown -R 0:0 "$RENDERD_DIR"; chmod 755 "$RENDERD_DIR" "$RENDERD_DIR/mgu-renderd"
     if [ "${1:-}" = "--persist" ]; then
         rm -f "/run/systemd/system/$RENDERD_UNIT"
@@ -444,6 +524,11 @@ install_renderd() {
         cmp -s "$TMP.unit" "/etc/systemd/system/$RENDERD_UNIT" || same=0
         rootfs_rw_do sh -c "cp '$TMP.unit' '/etc/systemd/system/$RENDERD_UNIT' && mkdir -p /etc/systemd/system/oapcontroller.service.wants && ln -sf '../$RENDERD_UNIT' '/etc/systemd/system/oapcontroller.service.wants/$RENDERD_UNIT'" || die "cannot write /etc/systemd/system/$RENDERD_UNIT"
         rm -f "$TMP.unit"
+        for u in $DBR_UNITS; do
+            printf '# added by mgu-app-install.sh: mgu-renderd serves display-bridge'"'"'s apps (its socket, the page template)\n[Unit]\nConditionPathExists=!%s/mgu-renderd\n' "$RENDERD_DIR" > "$TMP.dbr"
+            cmp -s "$TMP.dbr" "/etc/systemd/system/$u.d/$DBR_DROPIN" || rootfs_rw_do sh -c "mkdir -p '/etc/systemd/system/$u.d' && cp '$TMP.dbr' '/etc/systemd/system/$u.d/$DBR_DROPIN'" || warn "cannot write the $u drop-in"
+        done
+        rm -f "$TMP.dbr"
         say "renderer persisted (starts with the app platform)"
     else
         # runtime unit: gone after a reboot
@@ -451,23 +536,109 @@ install_renderd() {
         same=0
     fi
     systemctl daemon-reload
-    if [ $same = 1 ] && systemctl is-active -q "$RENDERD_UNIT"; then say "renderer unchanged and running"; return 0; fi
+    if [ $same = 1 ] && systemctl is-active -q "$RENDERD_UNIT"; then say "renderer unchanged and running"; renderd_embed_too "${1:-}"; return 0; fi
     systemctl restart "$RENDERD_UNIT" || die "renderer did not start: journalctl -u $RENDERD_UNIT"
     i=0; while [ $i -lt 10 ] && [ ! -S /run/mgu-renderd/renderd.sock ]; do sleep 1; i=$((i+1)); done
     if [ -S /run/mgu-renderd/renderd.sock ]; then say "renderer running - apps switch to it within a few seconds"
     else warn "renderer socket not up yet - see: journalctl -u $RENDERD_UNIT"; fi
+    renderd_embed_too "${1:-}"
+}
+# a persistent renderer gets in-page drawing too (NO_EMBED=1: not); without it the renderer works as before
+renderd_embed_too() {
+    [ "${1:-}" = "--persist" ] && [ "${NO_EMBED:-0}" != 1 ] || return 0
+    ( install_embed ) || warn "in-page drawing not set up - apps draw over their pages instead (sh $0 renderd-embed to try again)"
 }
 
 remove_renderd() {
     remove_inputgate
+    remove_embed
     systemctl stop "$RENDERD_UNIT" 2>/dev/null
     rm -f "/run/systemd/system/$RENDERD_UNIT"
     if [ -e "/etc/systemd/system/$RENDERD_UNIT" ] || [ -L "/etc/systemd/system/oapcontroller.service.wants/$RENDERD_UNIT" ]; then
-        rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$RENDERD_UNIT' '/etc/systemd/system/oapcontroller.service.wants/$RENDERD_UNIT'; rmdir /etc/systemd/system/oapcontroller.service.wants 2>/dev/null; true"
+        rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$RENDERD_UNIT' '/etc/systemd/system/oapcontroller.service.wants/$RENDERD_UNIT' && { rmdir /etc/systemd/system/oapcontroller.service.wants 2>/dev/null; true; }"
     fi
+    for u in $DBR_UNITS; do
+        [ -e "/etc/systemd/system/$u.d/$DBR_DROPIN" ] && rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$u.d/$DBR_DROPIN' && { rmdir '/etc/systemd/system/$u.d' 2>/dev/null; true; }"
+    done
     systemctl daemon-reload
     rm -rf "$RENDERD_DIR"
     say "renderer removed (apps draw in software again)"
+}
+
+# ---- in-page drawing: the renderer's HMI page template (kit/renderd/systemd/mgu-render-hmi.sh) ----
+# Apps can draw inside their own HMI page instead of over it (mgu-render/1 "embed", display-bridge's apps): the
+# HMI's title bar, popups, camera, BACK and HOME then behave as on any stock page. The template is made once here
+# from the installed HmiMain3D (in $RENDERD_DIR/hmi); $EMBED_UNIT mounts it into the HMI's widgets before each HMI
+# start (a copy in /run, nothing on the unit is written), only while it was made for this HmiMain3D, and behind a
+# boot guard (mgu-render-hmi-guard.sh: left out after two starts in a row in which the HMI did not stay up with it).
+embed_unit() {
+    cat <<UNIT
+# added by mgu-app-install.sh - the renderer's page template in the HMI (remove: sh mgu-app-install.sh renderd-embed-remove)
+[Unit]
+Description=mgu-renderd page template for the HMI (in-page drawing)
+DefaultDependencies=no
+Before=hmi.service
+RequiresMountsFor=$RENDERD_DIR /mnt/dataro/data/hmi
+# mgu-store's own mgu-render, when installed, puts its template in instead
+ConditionPathExists=!/var/opt/mgu-render/current/mgu-render
+# the Store's idrive7-renderd took this renderer over (it removes the program, not this unit): its own unit mounts
+ConditionPathExists=$RENDERD_DIR/mgu-renderd
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# mounts the template made at install, nothing more: without one for this HmiMain3D, on any failure, after two
+# starts the HMI did not survive with it, or after 30 s, the stock widgets stay and the HMI starts as usual
+TimeoutStartSec=30
+Environment=MGU_RENDER_RUN=$EMBED_RUN/hmi-widget MGU_RENDER_MARKER=$EMBED_RUN/hmi-template
+ExecStart=-/bin/sh $RENDERD_DIR/mgu-render-hmi-guard.sh $RENDERD_DIR $RENDERD_DIR/hmi
+
+[Install]
+WantedBy=hmi.service
+UNIT
+}
+
+embed_mounted() { grep -q " ${EMBED_RUN#/run}/hmi-widget " /proc/self/mountinfo; }
+
+install_embed() {
+    [ -x "$RENDERD_DIR/mgu-renderd" ] || die "install the renderer first (sh $0 renderd --persist)"
+    [ -e /usr/bin/HmiMain3D ] || die "no HmiMain3D on this unit: no page template"
+    for f in hmi_template.js mgu-render-hmi.sh mgu-render-hmi-guard.sh; do
+        [ -f "$SELF_DIR/$f" ] || die "$f not found next to $0"
+        cp "$SELF_DIR/$f" "$RENDERD_DIR/$f" || die "copy failed"
+    done
+    say "making the HMI page template for in-page drawing (up to 2 min)..."
+    sh "$RENDERD_DIR/mgu-render-hmi.sh" --build "$RENDERD_DIR" "$RENDERD_DIR/hmi"
+    grep -q '"template": "ok"' "$RENDERD_DIR/status.json" 2>/dev/null || die "no page template: $(sed -n 's/^"reason": //p' "$RENDERD_DIR/status.json" 2>/dev/null)"
+    rm -f "$RENDERD_DIR/hmi/strikes"                    # installing again = a fresh try for the boot guard
+    embed_unit > "$TMP.unit" || die "tmp"
+    if ! cmp -s "$TMP.unit" "/etc/systemd/system/$EMBED_UNIT" || [ ! -L "/etc/systemd/system/hmi.service.wants/$EMBED_UNIT" ]; then
+        rootfs_rw_do sh -c "cp '$TMP.unit' '/etc/systemd/system/$EMBED_UNIT' && mkdir -p /etc/systemd/system/hmi.service.wants && ln -sf '../$EMBED_UNIT' '/etc/systemd/system/hmi.service.wants/$EMBED_UNIT'" || die "cannot write /etc/systemd/system/$EMBED_UNIT"
+        systemctl daemon-reload
+    fi
+    rm -f "$TMP.unit"
+    if [ "${1:-}" = "--now" ]; then
+        say "restarting the HMI with the template (VM / bench only)..."
+        systemctl stop hmi.service; systemctl restart "$EMBED_UNIT"; systemctl start hmi.service
+        systemctl restart "$RENDERD_UNIT" 2>/dev/null
+    elif [ -f "$EMBED_RUN/hmi-template" ]; then
+        say "in-page drawing ready"
+    else
+        say "in-page drawing set up: from the next head-unit start"
+    fi
+}
+
+remove_embed() {
+    if [ -e "/etc/systemd/system/$EMBED_UNIT" ] || [ -L "/etc/systemd/system/hmi.service.wants/$EMBED_UNIT" ]; then
+        rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$EMBED_UNIT' '/etc/systemd/system/hmi.service.wants/$EMBED_UNIT' && { rmdir /etc/systemd/system/hmi.service.wants 2>/dev/null; true; }"
+        systemctl daemon-reload
+        say "page template taken out: the stock widgets come back at the next head-unit start"
+    fi
+    if [ "${1:-}" = "--now" ] && embed_mounted; then
+        systemctl stop hmi.service; umount /mnt/dataro/data/hmi/bmw/widget; rm -f "$EMBED_RUN/hmi-template"
+        systemctl start hmi.service
+    fi
+    rm -rf "$RENDERD_DIR/hmi" "$RENDERD_DIR/hmi.new" "$RENDERD_DIR/status.json" "$RENDERD_DIR/hmi_template.js" "$RENDERD_DIR/mgu-render-hmi.sh" "$RENDERD_DIR/mgu-render-hmi-guard.sh"
 }
 
 # ---- controller gate (kit/renderd/inputgate/mgu-inputgate.cpp) ----
@@ -607,7 +778,7 @@ gate_files_remove() {
     rm -f "/run/systemd/system/$GATE_DROPIN_NAME" /run/mgu-inputgate.env
     rmdir /run/systemd/system/hmi.service.d 2>/dev/null
     if [ -e "/etc/systemd/system/$GATE_DROPIN_NAME" ] || [ -e "/etc/systemd/system/$GATE_UNIT" ] || [ -e "/etc/systemd/system/$GATE_CHECK" ]; then
-        rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$GATE_DROPIN_NAME' '/etc/systemd/system/$GATE_UNIT' '/etc/systemd/system/$GATE_CHECK'; rmdir /etc/systemd/system/hmi.service.d 2>/dev/null; true"
+        rootfs_rw_do sh -c "rm -f '/etc/systemd/system/$GATE_DROPIN_NAME' '/etc/systemd/system/$GATE_UNIT' '/etc/systemd/system/$GATE_CHECK' && { rmdir /etc/systemd/system/hmi.service.d 2>/dev/null; true; }"
     fi
     rm -f "$RENDERD_DIR/inputgate.env" "$RENDERD_DIR/inputgate.strikes" "$GATE_GUARD"
     systemctl daemon-reload
@@ -667,13 +838,16 @@ apply() {
 cmd=${1:-}; [ $# -gt 0 ] && shift
 case "$cmd" in
     install)   [ $# -gt 0 ] || die "usage: $0 install <app.mgu>..."
-               backup; for f in "$@"; do install_one "$f"; done
+               backup; for f in "$@"; do install_one "$f"; DONE_RESTART=$NEED_RESTART; done
+               DONE_RESTART=0
                patch_active || warn "provisioning hook not active: MainApp will hide the app. Run: sh $0 patch"
                if [ $NEED_RESTART = 1 ]; then apply; else say "updated in place - the new version runs on the next tile tap"; fi ;;
     verify)    [ $# -gt 0 ] || die "usage: $0 verify <app.mgu>..."
                bad=0; for f in "$@"; do verify_one "$f" || bad=1; done
                exit $bad ;;
     uninstall) [ $# -gt 0 ] || die "usage: $0 uninstall <app-id>..."
+               # every id checked first: an error after the stop below would leave the platform stopped
+               for a in "$@"; do uninstall_check "$a"; done
                # stop the platform first so MainApp doesn't see the app vanish
                # under it (it would try to "recover" it)
                backup; [ "${NO_RESTART:-0}" = 1 ] || systemctl stop oapcontroller.service
@@ -687,8 +861,10 @@ case "$cmd" in
     unpatch)   unpatch_mainapp; apply ;;
     renderd)   install_renderd "${1:-}" ;;
     renderd-remove) remove_renderd ;;
+    renderd-embed) install_embed "${1:-}" ;;
+    renderd-embed-remove) remove_embed "${1:-}" ;;
     inputgate) install_inputgate "${1:-}" ;;
     inputgate-remove) remove_inputgate "${1:-}" ;;
     inputgate-status) echo "controller gate: $(gate_state)" ;;
-    *) sed -n '2,30p' "$0"; exit 2 ;;
+    *) sed -n '2,37p' "$0"; exit 2 ;;
 esac

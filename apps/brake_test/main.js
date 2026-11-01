@@ -44,6 +44,23 @@ mgu.run({
 
         /* ---------- measurement ---------- */
         let state = 'arm', prev = null, run = null, last = null, msg = null, msgUntil = 0;
+        // the speed lost since the last speed sample (or since the braking began; till then the held speed was
+        // still true), by the measured deceleration: [t, km/h]. Speed comes at ~10 Hz, accel at ~50 Hz: this
+        // places the 100 km/h crossing between speed samples, also while the brake pressure still builds.
+        let curve = [];
+        const KMH_PER_G = 9.80665 * 3.6;      // km/h per second at 1 g
+        /** When the speed had dropped by need: on the curve scaled to the drop measured by t (lost); without
+         * a deceleration on it, straight from its start. */
+        function crossAt(need, lost, t) {
+            const t1 = curve.length ? curve[0][0] : prev.t, end = curve.length ? curve[curve.length - 1][1] : 0;
+            if (!(end > 0)) return t1 + need / lost * (t - t1);
+            const k = lost / end;
+            for (let i = 1; i < curve.length; i++) {
+                const [ta, a] = curve[i - 1], [tb, b] = curve[i];
+                if (k * b >= need) return ta + (need - k * a) / (k * (b - a)) * (tb - ta);
+            }
+            return t;
+        }
         // run: { t0, dist, cross: {key: {t, d}}, trace: [[d, v, g]], peakG, released }
 
         function finish(t) {
@@ -70,19 +87,26 @@ mgu.run({
             if (!G.isNum(v)) return;
             store = d.demo ? demoStore : saved;
             const top = tests()[0], low = mainTest();
+            // accel samples come in between with the last speed held (speed is sent on change): prev is the
+            // last speed sample, distance and crossings go from speed sample to speed sample only
+            const fresh = !prev || v !== prev.v, braking = G.isNum(g) && -g >= 0.1;
+            const c = curve[curve.length - 1];
+            if (c && t > c[0]) curve.push([t, c[1] + (braking ? -g * KMH_PER_G * (t - c[0]) / 1000 : 0)]);
             if (state === 'braking') {
                 const dt = (t - prev.t) / 1000;
                 if (dt <= 0) return;
-                run.dist += (prev.v + v) / 2 / 3.6 * dt;
                 if (G.isNum(g)) run.peakG = Math.max(run.peakG, -g);
-                // later (lower) test speeds crossed during the same stop
-                tests().forEach((x) => {
-                    if (!run.cross[x.key] && prev.v >= x.v && v < x.v) {
-                        const f = (prev.v - x.v) / (prev.v - v);
-                        run.cross[x.key] = { t: prev.t + f * (t - prev.t), d: run.dist - (1 - f) * (prev.v + v) / 2 / 3.6 * dt };
-                    }
-                });
-                run.trace.push([run.dist, v, G.isNum(g) ? -g : null]);
+                if (fresh) {
+                    run.dist += (prev.v + v) / 2 / 3.6 * dt;
+                    // later (lower) test speeds crossed during the same stop
+                    tests().forEach((x) => {
+                        if (!run.cross[x.key] && prev.v >= x.v && v < x.v) {
+                            const f = (prev.v - x.v) / (prev.v - v);
+                            run.cross[x.key] = { t: prev.t + f * (t - prev.t), d: run.dist - (1 - f) * (prev.v + v) / 2 / 3.6 * dt };
+                        }
+                    });
+                    run.trace.push([run.dist, v, G.isNum(g) ? -g : null]);
+                }
                 if (G.isNum(g) && -g < 0.1) { run.released = run.released || t; } else run.released = 0;
                 if (v < 0.5) finish(t);
                 else if (run.released && t - run.released > 1200) { state = 'arm'; run = null; msg = 'Brake released - stop not counted'; msgUntil = Date.now() + 4000; }
@@ -92,15 +116,16 @@ mgu.run({
                 if (state === 'ready' && prev && G.isNum(g) && -g >= settings.get('trigger')) {
                     const hit = [top, low].find((x) => prev.v >= x.v && v < x.v);
                     if (hit) {
-                        const f = (prev.v - hit.v) / (prev.v - v), dt = (t - prev.t) / 1000;
-                        const t0 = prev.t + f * (t - prev.t), d0 = (1 - f) * (hit.v + v) / 2 / 3.6 * dt;
+                        // on the deceleration since the speed was last known (a steady cruise sends none: prev.t is old)
+                        const t0 = crossAt(prev.v - hit.v, prev.v - v, t), d0 = (hit.v + v) / 2 / 3.6 * (t - t0) / 1000;
                         run = { t0, dist: d0, cross: { [hit.key]: { t: t0, d: 0 } }, trace: [[0, hit.v, -g], [d0, v, -g]], peakG: -g, vStart: hit.v };
                         state = 'braking'; last = null;
                     }
                 }
                 if (state === 'done' && v > 5) state = v > low.v + 3 ? 'ready' : 'arm';
             }
-            prev = { t, v };
+            if (fresh || !braking) curve = [[t, 0]];
+            if (fresh) prev = { t, v };
         }, () => { state = 'arm'; run = null; prev = null; });
 
         /* ---------- format ---------- */
@@ -118,7 +143,13 @@ mgu.run({
         function drawLive(cv, t, now) {
             const d = car.data(), low = mainTest();
             // ---- result / live panel
-            G.panel(cv, t, 24, 44, 470, 468, run ? 'Stopping' : last ? 'Last stop' : 'Ready');
+            const pr = G.panel(cv, t, 24, 44, 470, 468, run ? 'Stopping' : last ? 'Last stop' : 'Ready');
+            // room below the page (where the kit gives it; all three panels reach it): the status lines move
+            // down with the panels' bottom, the charts get taller
+            // (each panel's last line then ends G.MARGIN over its bottom: dl status, dc chart, df fade)
+            const dy = pr.y + pr.h - G.BOTTOM, dl = G.toMargin(dy, 13), dc = G.toMargin(dy, 63), df = G.toMargin(dy, 30);
+            // the panel's own button (where the kit runs the screen; else the bar's Cancel run)
+            G.button(cv, t, 494 - 20 - 170, 56, 170, 40, 'Cancel run', act, { key: 'cancel', busy: !run && !last });
             const showKey = last ? (last.result[low.key] ? low.key : Object.keys(last.result)[0]) : low.key;
             const lab = tests().find((x) => x.key === showKey) || low;
             const dist = run ? run.dist : last && last.result[showKey] ? last.result[showKey].m : null;
@@ -137,16 +168,16 @@ mgu.run({
             } else if (run) {
                 cv.text(G.fmt(V(G.hold('speed', d.speed, SPEED_MS)), 0) + (mph() ? ' mph' : ' km/h') + '  ·  ' + G.fmt(-d.gLong, 2) + ' g', 48, 295, 30, t.text, { font: 'bold' });
             }
-            const st = state === 'arm' ? STATE.arm + Math.round(V(low.v) + 3) + (mph() ? ' MPH' : ' KM/H') : STATE[state];
+            const st = state === 'arm' ? STATE.arm + Math.ceil(V(low.v + 3)) + (mph() ? ' MPH' : ' KM/H') : STATE[state];
             const col = state === 'ready' ? GO : state === 'braking' ? t.crit : t.dim;
-            cv.roundRect(48, 412, 422, 44, 8, withAlpha(col, state === 'ready' ? 0.25 + 0.2 * Math.sin(now / 160) : 0.18));
-            cv.text(msg && now < msgUntil ? msg.toUpperCase() : st, 259, 445, msg && now < msgUntil ? 18 : 24, col, { align: 'center', font: 'bold', spacing: 2 });
-            cv.text('SPEED ' + G.fmt(V(G.hold('speed', d.speed, SPEED_MS)), 0) + '   ·   ' + G.fmt(d.gLong, 2) + ' g', 48, 495, 22, t.dim, { font: 'bold', spacing: 0.5 });
+            cv.roundRect(48, 412 + dl, 422, 44, 8, withAlpha(col, state === 'ready' ? 0.25 + 0.2 * Math.sin(now / 160) : 0.18));
+            cv.text(msg && now < msgUntil ? msg.toUpperCase() : st, 259, 445 + dl, msg && now < msgUntil ? 18 : 24, col, { align: 'center', font: 'bold', spacing: 2 });
+            cv.text('SPEED ' + G.fmt(V(G.hold('speed', d.speed, SPEED_MS)), 0) + '   ·   ' + G.fmt(d.gLong, 2) + ' g', 48, 495 + dl, 22, t.dim, { font: 'bold', spacing: 0.5 });
 
             // ---- decel trace (g over distance)
             G.panel(cv, t, 518, 44, 620, 468, 'Deceleration');
             const tr = run ? run.trace : last ? last.trace : [];
-            const px = 584, py = 104, pw = 520, ph = 319;
+            const px = 584, py = 104, pw = 520, ph = 319 + dc;
             const dMax = Math.max(40, Math.ceil(((tr.length ? tr[tr.length - 1][0] : 0) + 5) / 20) * 20);
             const gMax = 1.5;
             const X = (m) => px + (m / dMax) * pw, Y = (g) => py + ph - (G.clamp(g, 0, gMax) / gMax) * ph;
@@ -173,30 +204,32 @@ mgu.run({
             cv.text(low.label.toUpperCase() + ', LAST ' + runs.length, 1186, 114, 22, t.dim, { font: 'bold', spacing: 0.5 });
             if (runs.length) {
                 const ms = runs.map((x) => x.result[low.key].m), lo = Math.min.apply(null, ms), hi = Math.max.apply(null, ms);
-                const bw = 40, gap = 8, base = 327;
+                const bw = 40, gap = 8, base = 327 + df;
                 runs.forEach((x, i) => {
                     const m = x.result[low.key].m, f = hi > lo ? (m - lo) / (hi - lo) : 0.5;
-                    const h = 60 + f * 120, col = m - lo > lo * 0.08 ? t.crit : m - lo > lo * 0.04 ? t.warn : GO;
+                    const h = 60 + f * (120 + df), col = m - lo > lo * 0.08 ? t.crit : m - lo > lo * 0.04 ? t.warn : GO;
                     cv.roundRect(1186 + i * (bw + gap), base - h, bw, h, 5, col);
                     cv.text(D(m).toFixed(0), 1186 + i * (bw + gap) + bw / 2, base + 26, 20, t.dim, { align: 'center' });
                 });
                 const n = ms.length, fade = n >= 3 ? (ms[n - 1] - Math.min.apply(null, ms.slice(0, n - 1))) / Math.min.apply(null, ms.slice(0, n - 1)) : 0;
                 const fc = fade > 0.08 ? t.crit : fade > 0.04 ? t.warn : GO;
-                cv.text(n < 3 ? 'need 3 stops' : fade > 0.08 ? 'FADING  +' + (fade * 100).toFixed(0) + '%' : fade > 0.04 ? 'WARM  +' + (fade * 100).toFixed(0) + '%' : 'CONSISTENT', 1186, 393, 26, n < 3 ? t.dim : fc, { font: 'bold', spacing: 1 });
+                cv.text(n < 3 ? 'need 3 stops' : fade > 0.08 ? 'FADING  +' + (fade * 100).toFixed(0) + '%' : fade > 0.04 ? 'WARM  +' + (fade * 100).toFixed(0) + '%' : 'CONSISTENT', 1186, 393 + df, 26, n < 3 ? t.dim : fc, { font: 'bold', spacing: 1 });
             } else cv.text('no stops yet', 1186, 242, 24, t.dim);
             tests().forEach((x, i) => {
                 const b = store.best[x.key];
-                cv.text('BEST ' + x.label, 1186, 444 + i * 34, 22, t.dim, { font: 'bold' });
-                cv.text(b ? D(b.m).toFixed(1) + ' ' + dU() : '--', 1552, 444 + i * 34, 24, b ? t.accent2 : t.dim, { align: 'right', font: 'num' });
+                cv.text('BEST ' + x.label, 1186, 444 + df + i * 34, 22, t.dim, { font: 'bold' });
+                cv.text(b ? D(b.m).toFixed(1) + ' ' + dU() : '--', 1552, 444 + df + i * 34, 24, b ? t.accent2 : t.dim, { align: 'right', font: 'num' });
             });
         }
 
         function drawHistory(cv, t) {
-            G.panel(cv, t, 24, 44, 1552, 468, 'All stops');
+            const p = G.panel(cv, t, 24, 44, 1552, 468, 'All stops');
+            G.button(cv, t, 1576 - 20 - 200, 56, 200, 40, clearArmed ? 'Yes, clear' : 'Clear log', act, { key: 'clear', color: clearArmed ? t.crit : null, busy: !store.runs.length });
             const ts = tests();
             const cols = [48, 330, 640, 950, 1180, 1400];
             ['WHEN', ts[1].label.toUpperCase(), ts[0].label.toUpperCase(), 'PEAK DECEL', 'FROM', ''].forEach((h, i) => cv.text(h, cols[i], 127, 22, t.dim, { font: 'bold', spacing: 1 }));
-            const runs = store.runs.filter((x) => x.unit === settings.get('speedUnit')).slice(0, 8);
+            // another row where the panel reaches further down (room below the page) and one fits whole
+            const runs = store.runs.filter((x) => x.unit === settings.get('speedUnit')).slice(0, 8 + Math.floor((p.y + p.h - G.BOTTOM) / 41));
             if (!runs.length) cv.text('No stops yet.', 48, 210, 26, t.dim);
             runs.forEach((r, i) => {
                 const y = 174 + i * 41;
@@ -229,13 +262,17 @@ mgu.run({
         const flip = () => { page = 1 - page; actionLabel(); return render(); };
         ui.onClick('BTN_PAGE', flip);
         ui.onClick('BTN_PREV', flip);
-        ui.onClick('BTN_ACTION', () => {
+        ctx.onTab((i) => i !== page && flip());
+        // Cancel run (Brake test) / Clear log, pressed twice (History): on the page, or the bar's button
+        function act() {
             if (page === 0) { run = null; last = null; state = 'arm'; return render(); }
             if (!clearArmed) { clearArmed = setTimeout(() => { clearArmed = null; actionLabel(); }, 5000); return actionLabel(); }
             clearTimeout(clearArmed); clearArmed = null;
             store.best = {}; store.runs = []; save(); actionLabel();
             return render();
-        });
+        }
+        ui.onClick('BTN_ACTION', act);
+        ctx.hideButton('BTN_ACTION');
         // every screen refresh (60 fps) with the GPU renderer; 8 fps in software (PNG frames)
         ctx.loop('MAIN', 8, render);
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));

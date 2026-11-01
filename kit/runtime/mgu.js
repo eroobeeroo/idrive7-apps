@@ -23,6 +23,8 @@ const path = require('path');
 const { OnlineApp, logging } = require('oap-sdk');
 const themes = require('./themes');
 const { Display } = require('./display');
+const { HmiText } = require('./hmi-text');
+const { listSheet } = require('./sheet');
 
 const sdkLog = logging.getSDKLogger();
 const SPEC = JSON.parse(fs.readFileSync(path.join(__dirname, 'app-spec.json'), 'utf8'));
@@ -44,6 +46,26 @@ function fileLog(level, msg) {
         if (st && st.size > 256 * 1024) fs.renameSync(LOG_FILE, LOG_FILE + '.1');
         fs.appendFileSync(LOG_FILE, new Date().toISOString() + ' ' + level + ' ' + msg + '\n');
     } catch (e) { /* data dir not writable (host preview) */ }
+}
+// The SDK can swallow the first RHMI resource error and fail later with a misleading
+// null entry-point factory. Preserve the original warnings/errors in the app log.
+['warn', 'error'].forEach((level) => {
+    const original = sdkLog[level];
+    sdkLog[level] = (...args) => {
+        const message = args.map((x) => x && x.stack || String(x)).join(' ');
+        if (message.indexOf(SPEC.id + ': ') !== 0) fileLog('SDK_' + level.toUpperCase(), message);
+        return original.apply(sdkLog, args);
+    };
+});
+// ...and the SDK's info lines that say why it did not create the app's screens (a CONFIG_STATE start, a
+// resource error, or a newer SDK's "conditionalLoading rhmiLoadingEnabled skipping loading": issue #39)
+{
+    const original = sdkLog.info;
+    sdkLog.info = (...args) => {
+        const message = args.map((x) => x && x.stack || String(x)).join(' ');
+        if (/conditionalLoading|_createRhmiApplication/.test(message) && message.indexOf(SPEC.id + ': ') !== 0) fileLog('SDK_INFO', message);
+        return original.apply(sdkLog, args);
+    };
 }
 const log = {};
 ['error', 'warn', 'info', 'debug'].forEach((lvl) => {
@@ -69,9 +91,13 @@ class Settings {
         try { Object.assign(this.values, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch (e) {}
         // one-time move of saved settings to the new default theme (M Tricolour); later choices are kept
         const th = this.item('theme');
-        if (th && fs.existsSync(this.file) && this.values._themeV !== 2) {
-            this.values.theme = th.default; this.values._themeV = 2;
-            try { fs.writeFileSync(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { /* read-only */ }
+        if (th && this.values._themeV !== 2) {
+            const saved = fs.existsSync(this.file);
+            this.values._themeV = 2;            // (a fresh install has the default: the mark is saved with its first setting)
+            if (saved) {
+                this.values.theme = th.default;
+                try { fs.writeFileSync(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { /* read-only */ }
+            }
         }
         // a setting with "reset": n in app.json goes back to its default once when n changes
         // (a new default reaches cars that saved the old one); later choices are kept
@@ -111,14 +137,6 @@ class Settings {
     }
 }
 
-/**
- * Text for the HMI's own lists / buttons. The HMI shows non-ASCII text from an app as mojibake
- * ("°C" arrives as "Â°C"), so '°' is dropped there ("125 C"); drawn screens are not affected.
- */
-function hmiText(s) {
-    return String(s).replace(/°/g, '').replace(/[^\x20-\x7e]/g, '');
-}
-
 /* ---------------- UI wrapper ---------------- */
 class Ui {
     constructor(app) {
@@ -130,6 +148,7 @@ class Ui {
         this._focus = Object.create(null);    // stateName -> false while a popup covers it
         this._focusHandlers = [];
         this.timing = { png: 0, push: 0 };    // ms spent encoding / handing images to the HMI
+        this._cnText = new HmiText();
     }
     comp(name) {
         const c = this.rhmi && this.rhmi.getByName(name);
@@ -145,13 +164,13 @@ class Ui {
     text(name, text, row, cell) {
         const c = this.comp(name);
         if (c && !row && (!cell || cell === 'Text') && this.display) this.display.label(name, text);   // slim bar mirrors it
-        return c ? this._try('text ' + name, c.setValue(row || 0, cell || 'Text', hmiText(text), 'Text')) : Promise.resolve();
+        return c ? this._try('text ' + name, this._cnText.set(c, name, row || 0, cell || 'Text', text)) : Promise.resolve();
     }
     /** Set several cells of one row: ui.cells('LIST', 3, { Text1stCol: 'a', Text2ndCol: 'b' }) */
     cells(name, row, obj) {
         const c = this.comp(name);
         if (!c) return Promise.resolve();
-        return Promise.all(Object.keys(obj).map((k) => this._try('cell ' + name + '.' + k, c.setValue(row, k, hmiText(obj[k]), 'Text'))));
+        return Promise.all(Object.keys(obj).map((k) => this._try('cell ' + name + '.' + k, this._cnText.set(c, name, row, k, obj[k]))));
     }
     /** Selected row of a drop-down menu. */
     selected(name, row) {
@@ -355,7 +374,7 @@ class Widget {
     }
     set(spawnId, cell, value, type) {
         if (!this.comp) return Promise.resolve();
-        if ((type || 'Text') === 'Text') value = hmiText(value);
+        if ((type || 'Text') === 'Text') value = widgetText(value);
         return Promise.resolve(this.comp.setValue(Number(spawnId), cell, value, type || 'Text'))
             .catch((e) => log.warn('widget ' + cell + ': ' + e));
     }
@@ -437,17 +456,46 @@ function wireSettings(ctx) {
             });
         } else ui.onClick(comp, () => { settings.cycle(s.key); return refresh(); });
     });
-    if (ui.comp('BTN_SETTINGS')) ui.onClick('BTN_SETTINGS', () => refresh().then(() => ui.open('SETTINGS')));
+    // Settings: drawn over the page by the renderer (sheet.js) where the kit runs the screen,
+    // else the HMI's settings screen. The HMI's screen shows the values chosen in either.
+    settings.onChange(() => { if (!ctx.display.sheet) refresh(); });
+    if (ui.comp('BTN_SETTINGS')) {
+        ui.onClick('BTN_SETTINGS', () => {
+            const d = ctx.display;
+            if (d.sheet && d.sheet.settings) { d.closeSheet(); return null; }
+            const sh = listSheet(settings, null, { version: SPEC.version });
+            sh.settings = true;
+            sh.onClose = () => refresh();
+            if (d.openSheet(sh)) return null;
+            return refresh().then(() => ui.open('SETTINGS'));
+        });
+    }
     return refresh();
+}
+
+// widget text cells: ASCII only, as before the Chinese text support. A widget has its own string
+// bundle, without the app's SID_CN_DYNAMIC slots, so non-ASCII text can't go through StringIds there.
+function widgetText(s) {
+    return String(s).replace(/°/g, '').replace(/[^\x20-\x7e]/g, '');
 }
 
 /* ---------------- run ---------------- */
 async function run(impl) {
-    try { return await runInner(impl); } catch (e) { fileLog('FATAL', 'start failed: ' + (e && e.stack || e)); throw e; }
+    try { return await runInner(impl); } catch (e) {
+        // log only: no process.exit here. On the car an unexpected exit makes CorruptAppsHandler
+        // wipe the app's data, and a second one uninstalls a custom app.
+        fileLog('FATAL', 'start failed: ' + (e && e.stack || e));
+        throw e;
+    }
 }
 async function runInner(impl) {
     const app = new OnlineApp();
     log.info('starting ' + SPEC.id + ' ' + SPEC.version);
+    // interfaces this unit lacks, which the installer left out (app.json "_optional")
+    try {
+        const missing = JSON.parse(fs.readFileSync(path.join(__dirname, 'missing-interfaces.json'), 'utf8'));
+        Object.keys(missing).forEach((i) => log.warn('this unit has no ' + i + ' - running without it: ' + missing[i]));
+    } catch (e) { /* none missing */ }
     // lifecycle as BMW's M Laptimer does it: report ACTIVE as soon as the app
     // status channel is up (otherwise MainApp stops the app right after start),
     // report HMI visibility, and exit when MainApp asks us to shut down
@@ -463,6 +511,15 @@ async function runInner(impl) {
     }
     await app.start();
     active();
+    if (!app.rhmiApplication) {
+        // The SDK did not create the app's screens: nothing can be shown. Stay up (idle) rather than throw: a
+        // crash makes CorruptAppsHandler wipe the app's data, and a second one uninstalls it (issue #39).
+        log.error('the SDK created no RHMI application, so the app has no screens and does not start. ' +
+            'Causes: the SDK config has rhmiLoadingEnabled off (an SDK extracted from a newer donor app; build.py ' +
+            'turns it on - rebuild the app), a CONFIG_STATE start, or the HMI could not load the app\'s resources ' +
+            '(see the SDK_ lines above). Idle until MainApp stops it.');
+        return;
+    }
     const ui = new Ui(app);
     const settings = new Settings(SPEC.settings);
     const display = new Display(ui, log, SPEC, settings, () => themes.theme(settings.get('theme')));
@@ -480,6 +537,31 @@ async function runInner(impl) {
         // onInput(fn): while grabbed, fn gets each controller event the HMI didn't (same fields
         // as FrontCCU.statusRotaryEncoderState, enums as numbers)
         controller: { grab(on) { display.grab(on); }, onInput(fn) { display.onCcu = fn; } },
+        /**
+         * onTab(fn): fn(i) when page tab i is tapped on the touchscreen (renderer with touch
+         * routing), or pressed with the controller after turning onto it. Where the kit runs the
+         * screen, fn(i, true) when that tap or press closed a sheet (Settings) over the page.
+         */
+        onTab(fn) { display.onTab = fn; },
+        /** onTap(fn): fn(x, y) for a tap on the page (app drawing px), where the kit runs the screen. */
+        onTap(fn) { display.onTap = fn; },
+        /** Show a sheet (sheet.js) over the page; false where it can't be (software path, other renderers). */
+        sheet(sh) { return display.openSheet(sh); },
+        /** hideButton(id): leave bar button id out where the kit runs the screen (its job is on the page there). */
+        hideButton(id) { display.hideButton(id); },
+        /**
+         * onScroll(fn): fn(dy) scrolls a page drawn with cv.scroll = true by dy px (+ = further down), from a
+         * finger dragged on it or the controller turned while on it; returns false when already at that end.
+         * cv.scroll = { y, bar: { x, y, w, h } } for a list on the page (from y down) with its scroll bar: the
+         * controller goes through the page's targets over y (its buttons) before the list, and shows it is on
+         * the list with the bar in the colour of the selection (no frame round the page).
+         */
+        onScroll(fn) { display.onScroll = fn; },
+        /**
+         * onLayout(fn): fn() when where the frame goes changed (the renderer came or went, touch routing, the
+         * layout setting): an app that draws only when its data changes draws again then.
+         */
+        onLayout(fn) { display.onLayout(fn); },
         /** The surface to draw one frame on (record.js Recorder, reused): pass it to ui.image. */
         canvas(w, h) { return display.canvas(w, h); },
         /**
@@ -537,8 +619,10 @@ async function runInner(impl) {
         },
     };
 
-    // visibility of our states (pauses rendering when the user leaves)
-    (SPEC.screens || []).forEach((s) => {
+    // visibility of our states (pauses rendering when the user leaves); the HMI's settings screen too (the
+    // drawn screen gives way to it: display.js)
+    const tracked = (SPEC.screens || []).concat(SPEC.settings && SPEC.settings.length ? [{ name: 'SETTINGS' }] : []);
+    tracked.forEach((s) => {
         const st = ui.comp(s.name);
         if (st && st.on) st.on('visible', (ev) => ui._setVisible(s.name, !!(ev && ev.visible)));
         // a popup over the screen (options, warnings, calls) takes its focus: the display hides
@@ -550,9 +634,12 @@ async function runInner(impl) {
         Promise.resolve().then(() => (shown ? app.registerHmiVisible() : app.unregisterHmiVisible()))
             .catch((e) => log.warn('hmi visible: ' + e));
         const open = [].concat.apply([], Object.keys(stack || {}).map((k) => stack[k] || []));
-        (SPEC.screens || []).forEach((s) => {
+        tracked.forEach((s) => {
             const st = ui.comp(s.name);
             if (st) ui._setVisible(s.name, open.indexOf(st.getId ? st.getId() : -1) >= 0);
+            // back in front (reopened after Home or another app): the HMI does not always say the
+            // screen has its focus again, and without it the drawn screen stayed hidden
+            if (st && shown && ui.isVisible(s.name)) ui._setFocus(s.name, true);
         });
     });
 
