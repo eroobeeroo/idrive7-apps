@@ -38,7 +38,8 @@ check('badge inside the map, bottom and top', () => {
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 120);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 444, y: 328, w: 200, h: 56 });   // a fifth of the map up from its edge
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 394, y: 300, w: 300, h: 84 });   // larger, a fifth of the map up from its edge
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 329, y: 293, w: 140, h: 40 });   // the HUD's as it was
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -103,7 +104,7 @@ class FakeCR extends EventEmitter {
         assert(cr && cr.app === 'edrive');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [444, 328, 200, 56]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [394, 300, 300, 84]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });

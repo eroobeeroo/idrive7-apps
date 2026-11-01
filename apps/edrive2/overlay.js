@@ -56,7 +56,8 @@ function mapRect(target, hudPct) {
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
 function badgeRect(r, where, target) {
-    const s = Math.max(0.62, Math.min(1, r.w / 640));
+    // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel
+    const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.5;
     const w = Math.round(200 * s / 4) * 4, h = Math.round(56 * s / 2) * 2;
     // on the cluster a fifth of the map in from its edge (towards the middle, clear of the gauges' rims);
     // on the HUD close to the edge of the map's picture
