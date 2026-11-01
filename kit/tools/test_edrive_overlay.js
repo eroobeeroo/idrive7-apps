@@ -39,7 +39,7 @@ check('badge inside the map, bottom and top', () => {
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 120);
     })));
     assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 394, y: 348, w: 300, h: 84 });   // larger, a tenth of the map up from its edge
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 329, y: 250, w: 140, h: 40 });   // the HUD's size, clear above its speed readout
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 370, y: 293, w: 140, h: 40 });   // the HUD's size, right of its speed readout
 });
 
 /* ---------- drawing and diffs ---------- */
