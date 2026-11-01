@@ -110,8 +110,11 @@ mgu.run({
         const one = (v, key) => { const e = entries(v, key)[0]; return e ? e[key] : undefined; };
 
         /* ---------- car signals (SOME/IP) ---------- */
-        const watch = (iface, handlers, what, opts) => ctx.signals.watch(iface, '1', handlers, log, opts && Object.assign({ active: () => inUse() }, opts))
-            .then((s) => log.info(what + ' ' + (s.error ? 'error: ' + s.error : 'subscribed')));
+        let overlay = null, overlayError = null;       // the map meter (overlay.js), for the status lines
+        // what each subscription did (the Car signals diagnostic page shows it)
+        const sigStatus = {};
+        const watch = (iface, handlers, what, opts, instance) => ctx.signals.watch(iface, instance || '1', handlers, log, opts && Object.assign({ active: () => inUse() }, opts))
+            .then((s) => { sigStatus[what] = s.error ? 'error: ' + s.error : 'subscribed'; log.info(what + ' ' + sigStatus[what]); return s; });
         watch('de.bmw.infrastructure.EnvironmentalInformation', {
             ExteriorTemperature: (v) => { const a = sc('ambient', v.temperatureExterior); if (a !== null) live.ambient = a; },
         }, 'ambient');
@@ -134,7 +137,20 @@ mgu.run({
         }, 'turn signals');
         watch('de.bmw.infotainment.vehicle.CDS', {
             statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); if (r > 400) lastActiveT = Date.now(); } },
-        }, 'rpm');
+            // engine oil temperature (deg C + 48, 255 none), for the map meter; the engine unit's when the car sends none
+            statusEngineTemperature: (v) => {
+                const raw = v && (v.temperatureEngineOilDrive !== undefined ? v.temperatureEngineOilDrive : one(v, 'temperatureEngineOilDrive'));
+                if (G.isNum(raw) && raw !== 255) { live.oil = raw - 48; live.oilT = Date.now(); live.oilSrc = 'car signal'; }
+            },
+        }, 'rpm and oil temperature');
+        // day or night (the car's light sensor), to dim the HUD extras at night: 1 day, 2 night, 0 unchanged
+        live.night = null;
+        watch('de.bmw.infotainment.vehicle.Vehicle', {
+            statusDayNightChangeOver: (v) => {
+                const c = v && (v.dayNightChangeOver !== undefined ? v.dayNightChangeOver : one(v, 'dayNightChangeOver'));
+                if (c === 1) live.night = false; else if (c === 2) live.night = true;
+            },
+        }, 'day / night');
         // climate on / A/C per zone (on when any zone is on)
         const zones = { climate: {}, ac: {} };
         const onZone = (what, on, zone) => {
@@ -395,6 +411,23 @@ mgu.run({
             }
             await readProbes();
         }
+
+        /* ---------- engine oil temperature from the engine unit, when the car's own signal has none ----------
+         * Only while the map meter shows it: the engine unit (DME, ecu 18) answers F45C (OBD PID 0x5C), deg C + 40. */
+        live.oil = null; live.oilT = 0; live.oilSrc = null;
+        let oilMiss = 0, oilSkipUntil = 0;
+        async function readOil() {
+            const want = /oil/.test(settings.get('meterExtra') || '');
+            if (!want || !diag.available || !shown() || Date.now() - live.oilT < 15000 || Date.now() < oilSkipUntil) return;
+            await exclusive(async () => {
+                try {
+                    const v = await reader.read({ ecu: 18, did: 'F45C', at: 0, bytes: 1, timeoutMs: 800 });
+                    if (G.isNum(v) && v - 40 >= -40 && v - 40 <= 170) { live.oil = v - 40; live.oilT = Date.now(); live.oilSrc = 'engine unit (F45C)'; oilMiss = 0; }
+                    else if (++oilMiss >= 3) { oilSkipUntil = Date.now() + 120000; oilMiss = 0; log.warn('oil temperature: no answer from the engine unit, paused 2 min'); }
+                } catch (e) { /* not this time */ }
+            }, false, 'oil temperature');
+        }
+        setInterval(() => { readOil().catch(() => {}); }, 10000);
 
         /* ---------- climate unit values being identified (config.probes) ----------
          * Raw numbers from the IHKA that follow the A/C compressor (D8D2) and the heater (D8D3). Their unit isn't
@@ -1063,10 +1096,22 @@ mgu.run({
                 + '  ·  climate ' + (live.climate === null ? 'n/a' : live.climate === 'ac' ? 'on (A/C)' : live.climate ? 'on' : 'off')
                 + '  ·  compressor raw ' + (live.acRaw === null ? 'n/a' : live.acRaw) + ' -> ' + (G.isNum(live.acKw) ? G.fmt(live.acKw, 2) + ' kW' : 'n/a')
                 + '  ·  LSC pack ' + (G.isNum(live.lscV) ? live.lscV + ' V' : 'n/a'), 48, 112, 20, t.text, { font: 'label' });
-            cv.fillRect(48, 128, 1504, 1, t.tick);
+            // what the map meter and HUD extras depend on, and whether each works
+            const ov = overlay && overlay.status ? overlay.status() : null;
+            const st = (k) => sigStatus[k] || 'waiting';
+            const lines = [
+                'Turn signals: ' + st('turn signals') + (live.indicator && live.indicator !== 'off' ? ' (now ' + live.indicator + ')' : '')
+                    + '   ·   Driver profile: ' + (live.profile ? live.profile : st('driver profile') === 'subscribed' ? 'subscribed, none read yet' : st('driver profile'))
+                    + '   ·   Day / night: ' + (live.night === null ? st('day / night') + ', none received' : live.night ? 'night' : 'day'),
+                'Oil temperature: ' + (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? fmtT(live.oil) + ' from the ' + live.oilSrc : 'none (' + st('rpm and oil temperature') + ')')
+                    + '   ·   Cluster renderer: ' + (overlayError ? 'error: ' + overlayError : ov ? ov.renderer : 'not started')
+                    + '   ·   Waze map: ' + (ov ? ov.map : '--'),
+            ];
+            lines.forEach((l, i) => cv.text(l, 48, 148 + i * 26, 18, t.text, { font: 'label' }));
+            cv.fillRect(48, 186, 1504, 1, t.tick);
             const rows = Object.keys(live.raw).sort().map((k) => [k, live.raw[k]]);
-            const step = Math.min(28, Math.floor(320 / Math.max(1, rows.length)));
-            let y = 158;
+            const step = Math.min(28, Math.floor(270 / Math.max(1, rows.length)));
+            let y = 214;
             rows.forEach(([k, v]) => {
                 if (y > 470) return;
                 cv.text(k, 48, y, 18, t.dim, { font: 'bold' });
@@ -1181,15 +1226,67 @@ mgu.run({
             });
         }
 
+        /* ---------- settings per driver profile ----------
+         * The head unit's current user account (SessionManager.currentUserAccountReference: a getter only, read
+         * every 5 s). Each driver keeps their own map meter and HUD settings (PROFILE_KEYS) in profiles.json: a
+         * change is kept for the driver at the time, and a driver seen again gets theirs back. One seen for the
+         * first time keeps what is set. */
+        const PROFILE_KEYS = ['meterDisplay', 'mapOverlay', 'meterExtra', 'turnSignals', 'hudBrightness', 'nightDim'];
+        const PROFILE_FILE = path.join(ctx.dataDir, 'profiles.json');
+        let profiles = {}, profile = null, applying = false;
+        try { profiles = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8')) || {}; } catch (e) { /* none yet */ }
+        const saveProfiles = () => { try { fs.writeFileSync(PROFILE_FILE, JSON.stringify(profiles)); } catch (e) { log.warn('profiles: ' + e); } };
+        const snapshot = () => { const o = {}; PROFILE_KEYS.forEach((k) => { o[k] = settings.get(k); }); return o; };
+        function onProfile(id) {
+            if (!id || id === profile) return;
+            profile = id;
+            const saved = profiles[id];
+            if (saved) {
+                applying = true;
+                PROFILE_KEYS.forEach((k) => { if (saved[k] !== undefined && saved[k] !== settings.get(k)) settings.set(k, saved[k]); });
+                applying = false;
+                log.info('driver profile ' + id + ': their settings');
+            } else {
+                profiles[id] = snapshot();
+                saveProfiles();
+                log.info('driver profile ' + id + ': first seen, the current settings kept for them');
+            }
+        }
+        settings.onChange((k, v) => {
+            if (applying || !profile || PROFILE_KEYS.indexOf(k) < 0) return;
+            profiles[profile] = Object.assign(profiles[profile] || snapshot(), { [k]: v });
+            saveProfiles();
+        });
+        watch('de.bmw.infotainment.personalization.SessionManager', {
+            currentUserAccountReference: (v) => {
+                const id = typeof v === 'string' ? v : v && (v.value || v.currentUserAccountReference);
+                if (id) { live.profile = String(id); onProfile(String(id)); }
+            },
+        }, 'driver profile', { pollMs: 5000, active: () => true }, 'de.bmw.infotainment.personalization.SessionManager');
+
+        /** The extra values the map meter shows besides the kW (setting meterExtra): [{ label, text, col }]. */
+        function meterExtras(t) {
+            const ex = settings.get('meterExtra') || 'none', out = [];
+            const temp = (c) => (G.isNum(c) ? G.fmt(T(c), 0) + '°' : '--');
+            if (/battery/.test(ex)) { const ct = cellTemps(data()); out.push({ label: 'BATT', text: temp(ct && ct.avg), col: ct ? tempColor(t, ct.avg) : t.dim }); }
+            if (/oil/.test(ex)) {
+                const ok = G.isNum(live.oil) && Date.now() - live.oilT < 60000;
+                out.push({ label: 'OIL', text: temp(ok ? live.oil : null), col: !ok ? t.dim : live.oil >= 125 ? t.warn : live.oil < 70 ? (t.cold || t.text) : t.text });
+            }
+            return out;
+        }
+
         // the kW over the Waze map in the cluster or HUD (Waze on cluster), while that map is showing
         try {
-            require('./overlay').startOverlay(ctx, {
+            overlay = require('./overlay').startOverlay(ctx, {
                 powerNow: (t) => power(data(), t),
                 limitsNow: () => limitsKw(data()),
                 indicator: () => live.indicator,
+                night: () => live.night === true,
+                extras: (t) => meterExtras(t),
                 keepFast() { const was = shown(); fastUntil = Date.now() + SHOWN_MS; if (!was && shown()) schedulePower(); },
             });
-        } catch (e) { log.warn('map overlay: ' + e); }
+        } catch (e) { overlay = null; overlayError = String(e); log.warn('map overlay: ' + e); }
 
         ctx.loop('MAIN', 2, render);
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));

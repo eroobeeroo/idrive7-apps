@@ -85,7 +85,8 @@ class FakeCR extends EventEmitter {
     const log = { info: (m) => logs.push(m), warn: (m) => logs.push('WARN ' + m) };
     let kw = 18, fast = 0, t = 1e6;
     let ind = 'off';
-    const lv = { powerNow: () => pw(kw), limitsNow: () => ({ out: 120, in: 60 }), keepFast: () => { fast++; }, indicator: () => ind };
+    const lv = { powerNow: () => pw(kw), limitsNow: () => ({ out: 120, in: 60 }), keepFast: () => { fast++; }, indicator: () => ind, night: () => night, extras: () => extras };
+    let night = false, extras = [];
     const wait = (ms) => new Promise((r) => setTimeout(r, ms || 30));
     const ov = startOverlay({ settings, log, theme: () => theme }, lv, { statusPath: status, ClusterRender: FakeCR, now: () => t, setInterval: () => 0, clearInterval: () => {} });
     const step = async () => { ov._read(); await wait(); };
@@ -170,6 +171,25 @@ class FakeCR extends EventEmitter {
     check('Always on the HUD, no reading: hidden', () => assert.strictEqual(ov.shown(), false));
     settings.v.meterDisplay = 'map'; kw = 5; t += 300; ov._tick();
     check('Waze on cluster stopped (status gone): hidden', () => assert.strictEqual(ov.shown(), false));
+    /* extras, brightness, night */
+    settings.v.meterDisplay = 'map'; settings.v.mapOverlay = 'bottom';
+    write({ state: 'showing', target: 'hud', hud_width_pct: 0 });
+    await step();
+    extras = [{ label: 'BATT', text: '24°' }, { label: 'OIL', text: '88°' }]; t += 300; ov._tick();
+    let ml = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.w > 100);
+    check('two extras: the meter wider, still inside the HUD map', () => {
+        const r = mapRect('hud', 0);
+        assert(ml && ml.w > 140 && ml.x >= r.x && ml.x + ml.w <= r.x + r.w, JSON.stringify(ml));
+    });
+    settings.v.hudBrightness = 50; t += 300; ov._tick();
+    check('HUD brightness 50 %: the meter at half opacity', () => assert.strictEqual(ml.opacity, 0.5));
+    settings.v.hudBrightness = 100; night = true; t += 300; ov._tick();
+    check('night: dimmer', () => assert(ml.opacity < 1 && ml.opacity > 0.4));
+    settings.v.nightDim = 'off'; t += 300; ov._tick();
+    check('night dimming off: full', () => assert.strictEqual(ml.opacity, 1));
+    check('status for the diagnostics', () => { const st = ov.status(); assert(/connected|connecting/.test(st.renderer) && /hud/.test(st.map)); });
+    extras = []; night = false; settings.v.nightDim = 'on';
+
     /* turn signals: arrows on the HUD, blinking by opacity only */
     const sets = () => cr.log.filter((e) => e[0] === 'set').length;
     ov._arrowTick();

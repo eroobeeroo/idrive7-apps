@@ -33,6 +33,8 @@ const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_w
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
 const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster's proportions (5:4)
 const INDICATOR_GREEN = '#22d046';   // the cluster's indicator green
+const EXTRA_W = 0.36;             // an extra value's column, of the meter's base width
+const NIGHT_DIM = 0.6;            // the HUD extras at night, of their brightness by day
 const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
 const ARROW_TICK_MS = 60;
 
@@ -61,10 +63,11 @@ function mapRect(target, hudPct) {
 }
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
-function badgeRect(r, where, target) {
-    // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel
+function badgeRect(r, where, target, extras) {
+    // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel;
+    // each extra value (battery or oil temperature) adds EXTRA_W of the base width
     const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.5;
-    const w = Math.round(200 * s / 4) * 4, h = Math.round(56 * s / 2) * 2;
+    const w = Math.min(Math.round(200 * s * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3), h = Math.round(56 * s / 2) * 2;
     // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
@@ -76,10 +79,18 @@ function badgeRect(r, where, target) {
 }
 
 /** Draws the badge: dark rounded backdrop, kW right-aligned, "kW", then the bar (regen left, use right). */
-function drawBadge(cv, t, pw, outMax, inMax) {
-    const w = cv.w, h = cv.h;
+function drawBadge(cv, t, pw, outMax, inMax, extras) {
+    extras = extras || [];
+    const W = cv.w, h = cv.h, w = Math.round(W / (1 + EXTRA_W * extras.length));
     cv.clear([0, 0, 0, 0]);
-    cv.roundRect(0, 0, w, h, h * 0.32, [8, 9, 12, 190]);
+    cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
+    // the extra values after the bar, each a small label over its value
+    const cw = extras.length ? (W - w) / extras.length : 0;
+    extras.forEach((e, i) => {
+        const cx = Math.round(w + cw * (i + 0.42));
+        cv.text(e.label, cx, Math.round(h * 0.36), Math.round(h * 0.2), t.dim, { font: 'bold', align: 'center', literal: true });
+        cv.text(e.text, cx, Math.round(h * 0.8), Math.round(h * 0.4), e.col || t.text, { font: 'bold', align: 'center', literal: true });
+    });
     const base = Math.round(h * 0.69), nx = Math.round(w * 0.39);
     cv.text(pw.text, nx, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
     cv.text('kW', nx + Math.round(w * 0.025), base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
@@ -205,11 +216,15 @@ function startOverlay(ctx, lv, opts) {
     }
 
     /** The layer for the map's current place; a new one when its size or place changed. */
-    function layer() {
+    let opacity = 1;
+    /* The HUD extras' opacity: the brightness setting, dimmed at night when nightDim is on. */
+    const hudOpacity = () => (Number(settings.get('hudBrightness')) || 100) / 100
+        * (settings.get('nightDim') !== 'off' && lv.night && lv.night() ? NIGHT_DIM : 1);
+    function layer(nExtras) {
         const pl = place();
         const r = pl && mapRect(pl.target, pl.pct);
         if (!r) return 0;
-        const b = badgeRect(r, where(), pl.target);
+        const b = badgeRect(r, where(), pl.target, nExtras);
         const key = [pl.target, b.x, b.y, b.w, b.h].join(',');
         if (key === geo && ref) return ref;
         if (!client()) return 0;
@@ -218,7 +233,8 @@ function startOverlay(ctx, lv, opts) {
         visible = false;
         last = null;
         cv = new Canvas(b.w, b.h);
-        ref = cr.image({ target: pl.target, klass: 'overlay', z: 10, x: b.x, y: b.y, w: b.w, h: b.h, iw: b.w, ih: b.h, visible: false });
+        opacity = pl.target === 'hud' ? hudOpacity() : 1;
+        ref = cr.image({ target: pl.target, klass: 'overlay', z: 10, x: b.x, y: b.y, w: b.w, h: b.h, iw: b.w, ih: b.h, visible: false, opacity });
         if (!ref) warnOnce('the renderer refused a ' + b.w + 'x' + b.h + ' layer');
         else log.info('map overlay: ' + b.w + 'x' + b.h + ' at ' + b.x + ',' + b.y + ' on ' + pl.target);
         return ref;
@@ -228,13 +244,16 @@ function startOverlay(ctx, lv, opts) {
         if (where() === 'off' || !place()) return hide();
         const t = ctx.theme(), pw = lv.powerNow(t);
         if (!G.isNum(pw.kw)) return hide();               // no reading (parked, asleep, no link): nothing to show
-        if (!layer()) return undefined;
+        const extras = lv.extras ? lv.extras(t) || [] : [];
+        if (!layer(extras.length)) return undefined;
+        const op = place().target === 'hud' ? hudOpacity() : 1;
+        if (op !== opacity) { opacity = op; cr.set(ref, { opacity }); }
         const tm = now();
         if (visible && tm - lastT < UPDATE_MS - 40) return undefined;    // (the draw timer's jitter)
         lastT = tm;
         const outMax = settings.get('gaugeKw') || 100, lim = lv.limitsNow();
         const inMax = Math.max(10, lim && G.isNum(lim.in) && lim.in >= 15 ? lim.in : outMax * 0.5);
-        drawBadge(cv, t, pw, outMax, inMax);
+        drawBadge(cv, t, pw, outMax, inMax, extras);
         const d = cv.d;
         if (!last) {
             cr.pixels(ref, null, Buffer.from(d.buffer, d.byteOffset, d.length));
@@ -304,7 +323,8 @@ function startOverlay(ctx, lv, opts) {
         const on = Math.floor((tm - blinkFrom) / BLINK_MS) % 2 === 0;
         if (on === lastPhase) return;
         lastPhase = on;
-        ['left', 'right'].forEach((d) => cr.set(arrows[d], { opacity: on && (dir === d || dir === 'both') ? 1 : 0 }));
+        const lit = hudOpacity();
+        ['left', 'right'].forEach((d) => cr.set(arrows[d], { opacity: on && (dir === d || dir === 'both') ? lit : 0 }));
     }
     const arrowTimer = si(arrowTick, ARROW_TICK_MS);
     process.on('exit', () => { hideArrows(); });
@@ -315,6 +335,11 @@ function startOverlay(ctx, lv, opts) {
         /** The Waze map as status.json says: { showing, target, pct }. */
         map: () => Object.assign({}, map),
         stop() { ci(poll); ci(draw); ci(arrowTimer); if (watcher) watcher.close(); hide(); hideArrows(); if (cr) cr.close(); },
+        /** For the diagnostics: the renderer link and the Waze map as status.json says. */
+        status: () => ({
+            renderer: cr ? (cr.ready ? 'connected' : 'connecting') : 'not needed yet',
+            map: map.showing ? 'showing on ' + map.target + (map.target === 'hud' ? ' (' + (map.pct || 'standard') + (map.pct ? ' %' : '') + ')' : '') : statusText ? 'not showing' : 'no Waze on cluster status',
+        }),
         /** The turn signal arrows: { shown, phase } (phase true: lit). */
         arrows: () => ({ shown: arrowsShown, phase: lastPhase, refs: Object.assign({}, arrows) }),
         _arrowTick: arrowTick,
