@@ -1,6 +1,6 @@
 'use strict';
 
-// eDrive's kW over the Waze map (apps/edrive/overlay.js) against a fake cluster render client and a status.json
+// eDrive Live's kW over the Waze map (apps/edrive2/overlay.js) against a fake cluster render client and a status.json
 // in a temp folder: where the badge goes on each target, that it shows only while the map shows and a reading
 // exists, and that updates carry only what changed. Also writes a preview of the badge:
 //   node kit/tools/test_edrive_overlay.js [preview.png]
@@ -18,7 +18,7 @@ Module._load = function (req, parent, isMain) {
     if (req.startsWith('./kit/')) return load.call(this, path.join(KIT, req.slice(6)), parent, isMain);
     return load.call(this, req, parent, isMain);
 };
-const { startOverlay, mapRect, badgeRect, drawBadge, changed } = require(path.join(ROOT, 'apps', 'edrive', 'overlay.js'));
+const { startOverlay, mapRect, badgeRect, drawBadge, changed } = require(path.join(ROOT, 'apps', 'edrive2', 'overlay.js'));
 const { Canvas } = require(path.join(KIT, 'canvas'));
 const themes = require(path.join(KIT, 'themes'));
 const theme = themes.theme('m_tricolour');

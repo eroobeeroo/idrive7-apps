@@ -1,8 +1,8 @@
 {
   "id": "edrive",
   "title": "eDrive",
-  "description": "Real electric range, live battery power, cells and climate power, HV battery health (SOH) and energy, last charge, charge log, 12 V battery voltage and a home-screen widget",
-  "version": "2.7.102",
+  "description": "Real electric range, live battery power, cells and climate power, HV battery health (SOH) and energy, last charge, charge log and 12 V battery voltage",
+  "version": "2.7.103",
   "vendor": "custom",
   "loggingId": "OA9C",
   "iconGlyph": "battery",
@@ -52,38 +52,6 @@
     },
     "de.bmw.infotainment.lsc.LSCDataSink": {
       "statusHighVoltageStorage": "s"
-    }
-  },
-  "startWidget": {
-    "comment": "Home-screen widget. Layout and cell names are those of BMW's Drive Recorder widget on this firmware: the drawn image goes into BackgroundImage1, the layout shows Title above it. If the image doesn't show or sits wrong, try another 'image' cell or adjust 'size' (pixels: the HMI scales the picture to the big widget and crops it centred; 384 x 256 fits the G05).",
-    "name": "eDrive",
-    "layout": "LT_Table_OnlineApps_DriveRecorderWidget",
-    "image": "BackgroundImage1",
-    "size": [
-      384,
-      256
-    ],
-    "safe": [
-      0.09,
-      0.1
-    ],
-    "cells": {
-      "ErrorInfo": [
-        false,
-        "Bool"
-      ],
-      "background": [
-        true,
-        "Bool"
-      ],
-      "ProgressbarVisible": [
-        false,
-        "Bool"
-      ],
-      "TextRecordings": [
-        "",
-        "Text"
-      ]
     }
   },
   "screens": [
@@ -345,39 +313,6 @@
         100,
         120,
         150
-      ]
-    },
-    {
-      "key": "widgetFps",
-      "label": "Home-screen widget: redraw per second",
-      "type": "number",
-      "unit": "fps",
-      "default": 8,
-      "steps": [
-        2,
-        4,
-        8,
-        12
-      ]
-    },
-    {
-      "key": "mapOverlay",
-      "label": "kW over the Waze map (cluster / HUD)",
-      "type": "choice",
-      "default": "bottom",
-      "options": [
-        [
-          "bottom",
-          "Bottom of the map"
-        ],
-        [
-          "top",
-          "Top of the map"
-        ],
-        [
-          "off",
-          "Off"
-        ]
       ]
     },
     {

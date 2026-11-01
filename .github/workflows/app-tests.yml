@@ -42,6 +42,7 @@ jobs:
       - run: node kit/tools/test_runtime.js
       - run: node kit/tools/test_edrive.js
       - run: node kit/tools/test_edrive_overlay.js
+      - run: node kit/tools/test_edrive_live.js
       - run: node kit/tools/test_warmup.js
       - run: node kit/tools/test_draggy.js
       - run: node kit/tools/test_brake_test.js

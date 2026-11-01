@@ -112,7 +112,7 @@ function packRects(d, w, rects) {
 }
 
 /**
- * ctx: the app's (settings, log, theme); lv: live.js's (powerNow, limitsNow, keepFast).
+ * ctx: the app's (settings, log, theme); lv: { powerNow(t), limitsNow(), keepFast() } from eDrive Live.
  * opts (tests): statusPath, ClusterRender, now, setInterval, clearInterval.
  */
 function startOverlay(ctx, lv, opts) {
