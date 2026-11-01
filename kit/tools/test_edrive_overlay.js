@@ -176,8 +176,8 @@ class FakeCR extends EventEmitter {
     check('no signal: no arrows', () => assert(!ov.arrows().shown && !ov.arrows().refs.left));
     ind = 'left'; t += 10; ov._arrowTick();
     const refs = ov.arrows().refs, la = cr.layers.get(refs.left), ra = cr.layers.get(refs.right);
-    check('left: both arrows made on the HUD, either side of the speed row; the left lit at once', () => {
-        assert(la.target === 'hud' && ra.target === 'hud' && la.x < 300 && ra.x > 560);
+    check('left: both arrows made on the HUD, small, at its top; the left lit at once', () => {
+        assert(la.target === 'hud' && ra.target === 'hud' && la.y < 200 && la.w <= 32 && la.x < ra.x);
         assert(ov.arrows().shown && la.visible && la.opacity === 1 && ra.opacity === 0);
     });
     const px0 = cr.log.filter((e) => e[0] === 'pixels').length;

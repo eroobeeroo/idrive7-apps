@@ -29,11 +29,11 @@ const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
-const HUD_MAX_PCT = 85;
-// turn signal arrows on the HUD, either side of its speed readout (as older BMW HUDs show them)
-const ARROW = { w: 64, h: 48, y: 289, left: 168, right: 600 };
+const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
+// turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
+const ARROW = { w: 28, h: 20, y: 148, left: 350, right: 422 };
 const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
-const ARROW_TICK_MS = 60;           // the HUD map's widest (waze-on-cluster hud_width_pct)
+const ARROW_TICK_MS = 60;
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
 function mapRect(target, hudPct) {
