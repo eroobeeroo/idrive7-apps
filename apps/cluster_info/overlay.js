@@ -27,10 +27,10 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
-const HUD_VISIBLE_RIGHT = 640;   // the HUD shows up to x ~645-694 (OIL cut off past it, measured from photos, G05)
+const HUD_VISIBLE_RIGHT = 680;   // the HUD shows up to x ~683 (a park's fill in the map reached it, photo on the road, G05)
 const HUD_SPEED_CLEAR = 405;     // left edge limit: the speed readout ends at x ~331 and Waze's car icon at ~400 (85 % map, G05)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
-const HUD_MAX_H = 52;             // the HUD panel's height at most: 40 was hard to read, 68 too big
+const HUD_MAX_H = 60;             // the HUD panel's height at most (the room right of the speed limits it first)
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
 const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster's proportions (5:4)
