@@ -28,6 +28,7 @@ const POLL_MS = 1000;             // status.json read this often (and on every c
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
+const HUD_BOTTOM = 290;          // the HUD's speed readout starts below this (scene pixels)
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
@@ -59,10 +60,13 @@ function badgeRect(r, where, target) {
     // the HUD's size to its map's width; on the cluster half as big again (300x84), read at a glance past the wheel
     const s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.5;
     const w = Math.round(200 * s / 4) * 4, h = Math.round(56 * s / 2) * 2;
-    // on the cluster a fifth of the map in from its edge (towards the middle, clear of the gauges' rims);
-    // on the HUD close to the edge of the map's picture
-    const m = target === 'hud' ? Math.round(10 * s) : Math.round(r.h * 0.2);
-    return { x: r.x + Math.floor((r.w - w) / 2), y: where === 'top' ? r.y + m : r.y + r.h - h - m, w, h };
+    // on the cluster a tenth of the map in from its edge (clear of the street names at the bottom and of the
+    // car's arrow in the middle); on the HUD near the edge of the map's picture, but at the bottom never below
+    // HUD_BOTTOM: under it is the HUD's own speed readout (seen on a G05)
+    const m = target === 'hud' ? Math.round(10 * s) : Math.round(r.h * 0.1);
+    let y = where === 'top' ? r.y + m : r.y + r.h - h - m;
+    if (target === 'hud' && where !== 'top') y = Math.min(y, HUD_BOTTOM - h);
+    return { x: r.x + Math.floor((r.w - w) / 2), y, w, h };
 }
 
 /** Draws the badge: dark rounded backdrop, kW right-aligned, "kW", then the bar (regen left, use right). */
