@@ -1,6 +1,6 @@
 'use strict';
 
-// eDrive Live's kW over the Waze map (apps/edrive2/overlay.js) against a fake cluster render client and a status.json
+// Cluster Info's panel over the Waze map (apps/cluster_info/overlay.js) against a fake cluster render client and a status.json
 // in a temp folder: where the badge goes on each target, that it shows only while the map shows and a reading
 // exists, and that updates carry only what changed. Also writes a preview of the badge:
 //   node kit/tools/test_edrive_overlay.js [preview.png]
@@ -18,7 +18,7 @@ Module._load = function (req, parent, isMain) {
     if (req.startsWith('./kit/')) return load.call(this, path.join(KIT, req.slice(6)), parent, isMain);
     return load.call(this, req, parent, isMain);
 };
-const { startOverlay, mapRect, badgeRect, drawBadge, changed } = require(path.join(ROOT, 'apps', 'edrive2', 'overlay.js'));
+const { startOverlay, mapRect, badgeRect, drawBadge, changed } = require(path.join(ROOT, 'apps', 'cluster_info', 'overlay.js'));
 const { Canvas } = require(path.join(KIT, 'canvas'));
 const themes = require(path.join(KIT, 'themes'));
 const theme = themes.theme('m_tricolour');
@@ -43,7 +43,7 @@ check('badge inside the map, bottom and top', () => {
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 422, y: 402, w: 244, h: 72 });   // 1.3x, at the map's bottom edge (below the car's arrow), as wide as its content
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 422, y: 376, w: 244, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
     assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 293, w: 136, h: 40 });   // the HUD's size, right of its speed readout
 });
 
@@ -85,12 +85,12 @@ class FakeCR extends EventEmitter {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'woc-'));
     const status = path.join(dir, 'status.json');
     const write = (o) => { fs.writeFileSync(status + '.tmp', JSON.stringify(o)); fs.renameSync(status + '.tmp', status); };
-    const settings = { v: { mapOverlay: 'bottom', gaugeKw: 100 }, get(k) { return this.v[k]; } };
+    const settings = { v: { show: 'map', place: 'bottom' }, get(k) { return this.v[k]; } };
     const logs = [];
     const log = { info: (m) => logs.push(m), warn: (m) => logs.push('WARN ' + m) };
     let kw = 18, fast = 0, t = 1e6;
     let ind = 'off';
-    const lv = { powerNow: () => pw(kw), limitsNow: () => ({ out: 120, in: 60 }), keepFast: () => { fast++; }, indicator: () => ind, night: () => night, extras: () => extras };
+    const lv = { power: () => (kw === null ? null : pw(kw)), limits: () => ({ outMax: 100, inMax: 60 }), keepFast: () => { fast++; }, indicator: () => ind, night: () => night, extras: () => extras };
     let night = false, extras = [];
     const wait = (ms) => new Promise((r) => setTimeout(r, ms || 30));
     const ov = startOverlay({ settings, log, theme: () => theme }, lv, { statusPath: status, ClusterRender: FakeCR, now: () => t, setInterval: () => 0, clearInterval: () => {} });
@@ -108,10 +108,10 @@ class FakeCR extends EventEmitter {
     await wait();
     const cr = FakeCR.last;
     check('map showing on the cluster: an overlay layer at its bottom, shown, fast reads asked', () => {
-        assert(cr && cr.app === 'edrive');
+        assert(cr && cr.app === 'cluster_info');
         const l = [...cr.layers.values()][0];
         assert.strictEqual(l.target, 'map'); assert.strictEqual(l.klass, 'overlay');
-        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [422, 402, 244, 72]);
+        assert.deepStrictEqual([l.x, l.y, l.w, l.h], [422, 376, 244, 72]);
         assert.strictEqual(l.visible, true); assert(ov.shown()); assert(fast > 0);
         assert(cr.log.some((e) => e[0] === 'pixels' && e[2] === null), 'whole image first');
     });
@@ -151,18 +151,18 @@ class FakeCR extends EventEmitter {
     });
     write({ state: 'showing', target: 'hud', hud_width_pct: 0 });
     await step();
-    settings.v.mapOverlay = 'off'; t += 300; ov._tick();
+    settings.v.show = 'off'; t += 300; ov._tick();
     check('setting off: hidden', () => assert.strictEqual(ov.shown(), false));
-    settings.v.mapOverlay = 'top'; t += 300; ov._tick();
+    settings.v.show = 'map'; settings.v.place = 'top'; t += 300; ov._tick();
     check('setting top: at the top of the map', () => {
         const l = [...cr.layers.values()][0], r = mapRect('hud', 0);
         assert(l.y < r.y + 20 && ov.shown(), JSON.stringify(l));
     });
 
-    settings.v.mapOverlay = 'bottom';
+    settings.v.place = 'bottom';
     write({ state: 'showing', target: 'map', hud_width_pct: 70 });
     await step();
-    settings.v.meterDisplay = 'hud'; t += 300; ov._tick();
+    settings.v.show = 'hud'; t += 300; ov._tick();
     check('Always on the HUD, the map on the cluster: the badge on the HUD at its standard map place', () => {
         const l = [...cr.layers.values()][0], r = mapRect('hud', 0);
         assert.strictEqual(l.target, 'hud'); assert(ov.shown());
@@ -174,10 +174,10 @@ class FakeCR extends EventEmitter {
     check('Always on the HUD: shown without Waze on cluster too', () => assert(ov.shown()));
     kw = null; t += 300; ov._tick();
     check('Always on the HUD, no reading: hidden', () => assert.strictEqual(ov.shown(), false));
-    settings.v.meterDisplay = 'map'; kw = 5; t += 300; ov._tick();
+    settings.v.show = 'map'; kw = 5; t += 300; ov._tick();
     check('Waze on cluster stopped (status gone): hidden', () => assert.strictEqual(ov.shown(), false));
     /* extras, brightness, night */
-    settings.v.meterDisplay = 'map'; settings.v.mapOverlay = 'bottom';
+    settings.v.show = 'map'; settings.v.place = 'bottom';
     write({ state: 'showing', target: 'hud', hud_width_pct: 0 });
     await step();
     extras = [{ label: 'BATT', text: '24°' }, { label: 'OIL', text: '88°' }]; t += 300; ov._tick();
@@ -194,6 +194,14 @@ class FakeCR extends EventEmitter {
     check('night dimming off: full', () => assert.strictEqual(ml.opacity, 1));
     check('status for the diagnostics', () => { const st = ov.status(); assert(/connected|connecting/.test(st.renderer) && /hud/.test(st.map)); });
     extras = []; night = false; settings.v.nightDim = 'on';
+
+    /* no power provider (a car without eDrive Live): the values alone */
+    kw = null; extras = [{ label: 'OIL', text: '88°' }, { label: 'COOL', text: '90°' }]; t += 300; ov._tick();
+    ml = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.w > 60 && l.h > 30 && l.visible);
+    check('no power, two values: a values-only panel, narrower than with the meter', () => assert(ov.shown() && ml && ml.w < 232, JSON.stringify(ml)));
+    extras = [{ label: 'OIL', text: '--' }]; t += 300; ov._tick();
+    check('nothing with a reading: hidden', () => assert.strictEqual(ov.shown(), false));
+    kw = 5; extras = [];
 
     /* turn signals: arrows on the HUD, blinking by opacity only */
     const sets = () => cr.log.filter((e) => e[0] === 'set').length;

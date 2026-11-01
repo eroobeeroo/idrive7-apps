@@ -40,7 +40,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: node kit/tools/test_runtime.js
-      - run: node kit/tools/test_edrive_overlay.js
+      - run: node kit/tools/test_cluster_info_overlay.js
+      - run: node kit/tools/test_cluster_info.js
       - run: node kit/tools/test_edrive_live.js
       - run: node kit/tools/test_diag_options.js
       - run: node kit/tools/test_zh.js

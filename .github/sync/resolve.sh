@@ -1,19 +1,20 @@
 #!/bin/bash
-# This fork's rules for an upstream merge (sync-upstream.yml). The fork carries only eDrive Live (apps/edrive2):
+# This fork's rules for an upstream merge (sync-upstream.yml). The fork carries only eDrive Live (apps/edrive2) and
+# Cluster Info (apps/cluster_info):
 #   during a conflicted merge: eDrive Live is this fork's own (upstream folded it into eDrive), so its files
 #   stay as here; a file this fork deleted that upstream changed stays deleted, and so does any other app's;
 #   README.md takes upstream's text with this fork's note (readme-note.md) on top;
 #   --after (the merge committed): an app upstream added or brought back is taken out again, the fork's own
 #   test workflow and Store manifest settings are kept, and the workflow for removed apps stays gone.
 set -u
-KEEP_APP=edrive2
+KEEP_APPS=' edrive2 cluster_info '
 HERE=$(cd "$(dirname "$0")" && pwd)
 if [ "${1:-}" = "--after" ]; then
     for d in apps/*/; do
         a=$(basename "$d")
-        [ "$a" = "$KEEP_APP" ] && continue
+        case "$KEEP_APPS" in *" $a "*) continue;; esac
         git rm -rqf --ignore-unmatch "apps/$a" && rm -rf "apps/$a"
-        echo "rule: removed apps/$a (this fork carries only $KEEP_APP)"
+        echo "rule: removed apps/$a (this fork carries only$KEEP_APPS)"
     done
     # the fork's own test list (upstream's names tests of apps this fork doesn't carry)
     if git rev-parse -q --verify HEAD^2 >/dev/null; then
@@ -28,7 +29,7 @@ git status --porcelain | while read -r code path; do
         DU) git rm -qf "$path"; echo "rule: kept deleted $path (deleted here, changed upstream)";;
         UU|AA|AU|UA|UD)
             case "$path" in
-                apps/"$KEEP_APP"/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
+                apps/edrive2/*|apps/cluster_info/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
                 apps/*) git rm -qf "$path" 2>/dev/null || true; echo "rule: dropped $path (an app this fork doesn't carry)";;
                 .github/workflows/app-tests.yml) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path (its own test list)";;
                 README.md)

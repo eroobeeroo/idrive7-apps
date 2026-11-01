@@ -78,8 +78,8 @@ Module._load = function (req, parent, isMain) {
     await FakeDiag.last.physical(7, 0x22, [0xdd, 0x68], 1000, null, { pendingTimeoutMs: 1500 });
     assert(FakeDiag.last.busyMs === 150, 'busy retries 150 ms apart');
     assert(phys.length === 2 && phys.every((o) => o && o.callTimeoutMs === 2000 && o.pendingTimeoutMs === 1500), 'short waits on every request');
-    assert.ok(SPEC.settings.some((s) => s.key === 'mapOverlay'), 'the map overlay setting');
-    assert.ok(fs.existsSync(path.join(APP, 'overlay.js')) && fs.existsSync(path.join(APP, 'cluster_render_client.js')));
+    assert.ok(SPEC.settings.some((s) => s.key === 'clusterInfo'), 'the Cluster Info setting');
+    assert.ok(fs.existsSync(path.join(APP, 'provider.js')) && !fs.existsSync(path.join(APP, 'overlay.js')), 'a provider for Cluster Info, no panel of its own');
     console.log('eDrive Live ' + SPEC.version + ': starts and draws on the current kit (' + Object.keys(clicks).length + ' buttons)');
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });

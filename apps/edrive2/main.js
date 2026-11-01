@@ -110,7 +110,6 @@ mgu.run({
         const one = (v, key) => { const e = entries(v, key)[0]; return e ? e[key] : undefined; };
 
         /* ---------- car signals (SOME/IP) ---------- */
-        let overlay = null, overlayError = null;       // the map meter (overlay.js), for the status lines
         // what each subscription did (the Car signals diagnostic page shows it)
         const sigStatus = {};
         const watch = (iface, handlers, what, opts, instance) => ctx.signals.watch(iface, instance || '1', handlers, log, opts && Object.assign({ active: () => inUse() }, opts))
@@ -126,27 +125,6 @@ mgu.run({
                 else if (G.isNum(live.speed) && !live.standSince) live.standSince = Date.now();
             },
         }, 'speed');
-        // the turn signals, for the arrows on the HUD (overlay.js). Either field may be the one the car fills, so both
-        // are watched (raw values on the Car signals page). controlIndicateDirection: 1 / 3 tap / steady left, 2 / 4
-        // right, 8 both (hazards), 0 off; else activeFunctionIndicateDirection: the function blinking (7 / 9 / 18 / 20
-        // / 22 left, 8 / 10 / 19 / 21 / 23 right, hazards and alarms both, 0 off)
-        live.indicator = 'off';
-        const ACTIVE_LEFT = [7, 9, 18, 20, 22], ACTIVE_RIGHT = [8, 10, 19, 21, 23], ACTIVE_BOTH = [1, 5, 6, 11, 12, 13, 16, 17, 24, 25];
-        const onIndicators = (what) => (v) => {
-            rawSeen(what, v);
-            const c = v && (v.controlIndicateDirection !== undefined ? v.controlIndicateDirection : one(v, 'controlIndicateDirection'));
-            const a = v && (v.activeFunctionIndicateDirection !== undefined ? v.activeFunctionIndicateDirection : one(v, 'activeFunctionIndicateDirection'));
-            let dir = null;
-            if (c === 1 || c === 3) dir = 'left'; else if (c === 2 || c === 4) dir = 'right'; else if (c === 8) dir = 'both'; else if (c === 0) dir = 'off';
-            if (dir === null || (dir === 'off' && G.isNum(a) && a > 0 && a < 250)) {
-                dir = ACTIVE_LEFT.indexOf(a) >= 0 ? 'left' : ACTIVE_RIGHT.indexOf(a) >= 0 ? 'right' : ACTIVE_BOTH.indexOf(a) >= 0 ? 'both' : a === 0 ? 'off' : dir;
-            }
-            if (dir) { if (dir !== live.indicator) log.info('turn signals: ' + dir + ' (' + what + ' ' + c + ' / ' + a + ')'); live.indicator = dir; live.indicatorT = Date.now(); }
-        };
-        watch('de.bmw.body.Light', {
-            StatusFunctionsIndicators: onIndicators('indicators'),
-            StatusFunctionsIndicators2: onIndicators('indicators 2'),
-        }, 'turn signals');
         watch('de.bmw.infotainment.vehicle.CDS', {
             statusEngineSpeed2: (v) => { const r = sc('rpm', v.actualValueRPMEngineCrankshaft); if (r !== null && r >= 0 && r < 12000) { live.rpm = r; live.rpmT = Date.now(); if (r > 400) lastActiveT = Date.now(); } },
             // engine oil temperature (deg C + 48, 255 none), for the map meter; the engine unit's when the car sends none
@@ -155,14 +133,7 @@ mgu.run({
                 if (G.isNum(raw) && raw !== 255) { live.oil = raw - 48; live.oilT = Date.now(); live.oilSrc = 'car signal'; }
             },
         }, 'rpm and oil temperature');
-        // day or night (the car's light sensor), to dim the HUD extras at night: 1 day, 2 night, 0 unchanged
-        live.night = null;
-        watch('de.bmw.infotainment.vehicle.Vehicle', {
-            statusDayNightChangeOver: (v) => {
-                const c = v && (v.dayNightChangeOver !== undefined ? v.dayNightChangeOver : one(v, 'dayNightChangeOver'));
-                if (c === 1) live.night = false; else if (c === 2) live.night = true;
-            },
-        }, 'day / night');
+
         // climate on / A/C per zone (on when any zone is on)
         const zones = { climate: {}, ac: {} };
         const onZone = (what, on, zone) => {
@@ -321,7 +292,7 @@ mgu.run({
         const driving = () => Date.now() - lastActiveT < IDLE_AFTER_MOVE;
         const inUse = () => driving() || Date.now() - lastUserT < IDLE_AFTER_USER;
         const touched = () => { const was = inUse(); lastUserT = Date.now(); if (!was) { log.info('in use again (user)'); schedulePower(); readSlow(); } };
-        // (or the kW over the Waze map in the cluster / HUD, overlay.js: keepFast() while it is up)
+        // (or Cluster Info's panel over the Waze map shows its power: provider.js keepFast() while it is up)
         let fastUntil = 0;
         const shown = () => inUse() && (Date.now() - lastDrawT < SHOWN_MS || Date.now() < fastUntil || (!!(ctx.widget && ctx.widget.active()) && driving()));
         const engineOn = () => G.isNum(live.rpm) && live.rpm > 400 && Date.now() - live.rpmT < 5000;
@@ -429,7 +400,7 @@ mgu.run({
         live.oil = null; live.oilT = 0; live.oilSrc = null;
         let oilMiss = 0, oilSkipUntil = 0;
         async function readOil() {
-            const want = /oil/.test(settings.get('meterExtra') || '');
+            const w = provider && provider.wanted(), want = !!(w && (w.values || []).indexOf('oil') >= 0);
             if (!want || !diag.available || !shown() || Date.now() - live.oilT < 15000 || Date.now() < oilSkipUntil) return;
             await exclusive(async () => {
                 try {
@@ -1108,16 +1079,11 @@ mgu.run({
                 + '  ·  climate ' + (live.climate === null ? 'n/a' : live.climate === 'ac' ? 'on (A/C)' : live.climate ? 'on' : 'off')
                 + '  ·  compressor raw ' + (live.acRaw === null ? 'n/a' : live.acRaw) + ' -> ' + (G.isNum(live.acKw) ? G.fmt(live.acKw, 2) + ' kW' : 'n/a')
                 + '  ·  LSC pack ' + (G.isNum(live.lscV) ? live.lscV + ' V' : 'n/a'), 48, 112, 20, t.text, { font: 'label' });
-            // what the map meter and HUD extras depend on, and whether each works
-            const ov = overlay && overlay.status ? overlay.status() : null;
-            const st = (k) => sigStatus[k] || 'waiting';
+            // what Cluster Info's panel gets from eDrive Live, and whether it works
+            const ps = provider ? provider.status() : null;
             const lines = [
-                'Turn signals: ' + st('turn signals') + (live.indicator && live.indicator !== 'off' ? ' (now ' + live.indicator + ')' : '')
-                    + '   ·   Driver profile: ' + (live.profile ? live.profile : st('driver profile') === 'subscribed' ? 'subscribed, none read yet' : st('driver profile'))
-                    + '   ·   Day / night: ' + (live.night === null ? st('day / night') + ', none received' : live.night ? 'night' : 'day'),
-                'Oil temperature: ' + (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? fmtT(live.oil) + ' from the ' + live.oilSrc : 'none (' + st('rpm and oil temperature') + ')')
-                    + '   ·   Cluster renderer: ' + (overlayError ? 'error: ' + overlayError : ov ? ov.renderer : 'not started')
-                    + '   ·   Waze map: ' + (ov ? ov.map : '--'),
+                'Cluster Info: ' + (settings.get('clusterInfo') === 'off' ? 'off (setting)' : !ps ? 'not started' : ps.wanted ? 'its panel is up, values sent ' + (ps.error ? '- error: ' + ps.error : (Date.now() - ps.written < 2000 ? 'now' : 'not yet')) : 'its panel is not up (or Cluster Info is not installed)')
+                    + '   ·   Oil temperature: ' + (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? fmtT(live.oil) + ' from the ' + live.oilSrc : 'none (' + (sigStatus['rpm and oil temperature'] || 'waiting') + ')'),
             ];
             lines.forEach((l, i) => cv.text(l, 48, 148 + i * 26, 18, t.text, { font: 'label' }));
             cv.fillRect(48, 186, 1504, 1, t.tick);
@@ -1238,67 +1204,19 @@ mgu.run({
             });
         }
 
-        /* ---------- settings per driver profile ----------
-         * The head unit's current user account (SessionManager.currentUserAccountReference: a getter only, read
-         * every 5 s). Each driver keeps their own map meter and HUD settings (PROFILE_KEYS) in profiles.json: a
-         * change is kept for the driver at the time, and a driver seen again gets theirs back. One seen for the
-         * first time keeps what is set. */
-        const PROFILE_KEYS = ['meterDisplay', 'mapOverlay', 'meterExtra', 'turnSignals', 'hudBrightness', 'nightDim'];
-        const PROFILE_FILE = path.join(ctx.dataDir, 'profiles.json');
-        let profiles = {}, profile = null, applying = false;
-        try { profiles = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8')) || {}; } catch (e) { /* none yet */ }
-        const saveProfiles = () => { try { fs.writeFileSync(PROFILE_FILE, JSON.stringify(profiles)); } catch (e) { log.warn('profiles: ' + e); } };
-        const snapshot = () => { const o = {}; PROFILE_KEYS.forEach((k) => { o[k] = settings.get(k); }); return o; };
-        function onProfile(id) {
-            if (!id || id === profile) return;
-            profile = id;
-            const saved = profiles[id];
-            if (saved) {
-                applying = true;
-                PROFILE_KEYS.forEach((k) => { if (saved[k] !== undefined && saved[k] !== settings.get(k)) settings.set(k, saved[k]); });
-                applying = false;
-                log.info('driver profile ' + id + ': their settings');
-            } else {
-                profiles[id] = snapshot();
-                saveProfiles();
-                log.info('driver profile ' + id + ': first seen, the current settings kept for them');
-            }
-        }
-        settings.onChange((k, v) => {
-            if (applying || !profile || PROFILE_KEYS.indexOf(k) < 0) return;
-            profiles[profile] = Object.assign(profiles[profile] || snapshot(), { [k]: v });
-            saveProfiles();
-        });
-        watch('de.bmw.infotainment.personalization.SessionManager', {
-            currentUserAccountReference: (v) => {
-                const id = typeof v === 'string' ? v : v && (v.value || v.currentUserAccountReference);
-                if (id) { live.profile = String(id); onProfile(String(id)); }
-            },
-        }, 'driver profile', { pollMs: 5000, active: () => true }, 'de.bmw.infotainment.personalization.SessionManager');
-
-        /** The extra values the map meter shows besides the kW (setting meterExtra): [{ label, text, col }]. */
-        function meterExtras(t) {
-            const ex = settings.get('meterExtra') || 'none', out = [];
-            const temp = (c) => (G.isNum(c) ? G.fmt(T(c), 0) + '°' : '--');
-            if (/battery/.test(ex)) { const ct = cellTemps(data()); out.push({ label: 'BATT', text: temp(ct && ct.avg), col: ct ? tempColor(t, ct.avg) : t.dim }); }
-            if (/oil/.test(ex)) {
-                const ok = G.isNum(live.oil) && Date.now() - live.oilT < 60000;
-                out.push({ label: 'OIL', text: temp(ok ? live.oil : null), col: !ok ? t.dim : live.oil >= 125 ? t.warn : live.oil < 70 ? (t.cold || t.text) : t.text });
-            }
-            return out;
-        }
-
-        // the kW over the Waze map in the cluster or HUD (Waze on cluster), while that map is showing
+        /* ---------- Cluster Info (apps/cluster_info): the power and temperatures for its panel over the Waze map ---------- */
+        let provider = null;
         try {
-            overlay = require('./overlay').startOverlay(ctx, {
-                powerNow: (t) => power(data(), t),
-                limitsNow: () => limitsKw(data()),
-                indicator: () => live.indicator,
-                night: () => live.night === true,
-                extras: (t) => meterExtras(t),
+            provider = require('./provider').startProvider(log, {
+                on: () => settings.get('clusterInfo') !== 'off',
+                power: () => { const pw = power(data(), ctx.theme()); return G.isNum(pw.kw) ? { kw: pw.kw, old: !!pw.old } : null; },
+                limits: () => limitsKw(data()),
+                gaugeKw: () => settings.get('gaugeKw'),
+                battery: () => { const ct = cellTemps(data()); return ct && G.isNum(ct.avg) ? ct.avg : null; },
+                oil: () => (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? live.oil : null),
                 keepFast() { const was = shown(); fastUntil = Date.now() + SHOWN_MS; if (!was && shown()) schedulePower(); },
             });
-        } catch (e) { overlay = null; overlayError = String(e); log.warn('map overlay: ' + e); }
+        } catch (e) { log.warn('cluster info: ' + e); }
 
         ctx.loop('MAIN', 2, render);
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));

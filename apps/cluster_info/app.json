@@ -1,0 +1,276 @@
+{
+  "id": "cluster_info",
+  "title": "Cluster Info",
+  "description": "A small panel of live values (battery power from eDrive Live, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
+  "version": "1.0.0",
+  "vendor": "custom",
+  "loggingId": "OA9E",
+  "iconGlyph": "gauge",
+  "signals": {
+    "de.bmw.infotainment.vehicle.CDS": {
+      "statusEngineTemperature": "rs"
+    },
+    "de.bmw.body.Light": {
+      "StatusFunctionsIndicators": "s",
+      "StatusFunctionsIndicators2": "s"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle": {
+      "statusDayNightChangeOver": "rs"
+    },
+    "de.bmw.infotainment.personalization.SessionManager": {
+      "_instances": "de.bmw.infotainment.personalization.SessionManager",
+      "currentUserAccountReference": "r"
+    }
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Cluster Info",
+      "buttons": [
+        [
+          "BTN_SETTINGS",
+          "Settings"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "show",
+      "label": "Show the panel",
+      "type": "choice",
+      "default": "map",
+      "options": [
+        [
+          "map",
+          "Where the Waze map is"
+        ],
+        [
+          "hud",
+          "Always on the HUD"
+        ],
+        [
+          "off",
+          "Off"
+        ]
+      ]
+    },
+    {
+      "key": "place",
+      "label": "Panel position",
+      "type": "choice",
+      "default": "bottom",
+      "options": [
+        [
+          "bottom",
+          "Bottom of the map"
+        ],
+        [
+          "top",
+          "Top of the map"
+        ]
+      ]
+    },
+    {
+      "key": "power",
+      "label": "Battery power (kW meter, from eDrive Live)",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        [
+          "on",
+          "Show"
+        ],
+        [
+          "off",
+          "Hide"
+        ]
+      ]
+    },
+    {
+      "key": "value1",
+      "label": "First value",
+      "type": "choice",
+      "default": "battery",
+      "options": [
+        [
+          "none",
+          "Nothing"
+        ],
+        [
+          "battery",
+          "Battery temperature"
+        ],
+        [
+          "oil",
+          "Engine oil temperature"
+        ],
+        [
+          "coolant",
+          "Coolant temperature"
+        ]
+      ]
+    },
+    {
+      "key": "value2",
+      "label": "Second value",
+      "type": "choice",
+      "default": "oil",
+      "options": [
+        [
+          "none",
+          "Nothing"
+        ],
+        [
+          "battery",
+          "Battery temperature"
+        ],
+        [
+          "oil",
+          "Engine oil temperature"
+        ],
+        [
+          "coolant",
+          "Coolant temperature"
+        ]
+      ]
+    },
+    {
+      "key": "turnSignals",
+      "label": "Turn signal arrows on the HUD",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        [
+          "on",
+          "On"
+        ],
+        [
+          "off",
+          "Off"
+        ]
+      ]
+    },
+    {
+      "key": "hudBrightness",
+      "label": "HUD panel and arrows: brightness",
+      "type": "number",
+      "unit": "%",
+      "default": 100,
+      "steps": [
+        100,
+        75,
+        50
+      ]
+    },
+    {
+      "key": "nightDim",
+      "label": "HUD panel and arrows: dimmer at night",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        [
+          "on",
+          "On"
+        ],
+        [
+          "off",
+          "Off"
+        ]
+      ]
+    },
+    {
+      "key": "tempUnit",
+      "label": "Temperature unit",
+      "type": "choice",
+      "default": "f",
+      "options": [
+        [
+          "f",
+          "Fahrenheit"
+        ],
+        [
+          "c",
+          "Celsius"
+        ]
+      ]
+    },
+    {
+      "key": "theme",
+      "label": "Colour theme",
+      "type": "choice",
+      "default": "m_tricolour",
+      "options": [
+        [
+          "m_red",
+          "M Red"
+        ],
+        [
+          "m_tricolour",
+          "M Tricolour"
+        ],
+        [
+          "ice",
+          "Ice White"
+        ],
+        [
+          "amber",
+          "Night Amber"
+        ]
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "Screen layout",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        [
+          "full",
+          "Full screen"
+        ],
+        [
+          "standard",
+          "Standard"
+        ]
+      ]
+    },
+    {
+      "key": "renderer",
+      "label": "Renderer",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "GPU 60 fps (default)"
+        ],
+        [
+          "software",
+          "Software"
+        ]
+      ]
+    },
+    {
+      "key": "demo",
+      "label": "Demo data",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "auto",
+          "Auto"
+        ],
+        [
+          "on",
+          "Always"
+        ],
+        [
+          "off",
+          "Never"
+        ]
+      ]
+    }
+  ]
+}

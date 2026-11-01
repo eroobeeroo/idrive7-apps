@@ -1,18 +1,17 @@
 'use strict';
 /**
- * overlay.js - the battery's power now (kW and a small centre-zero bar) drawn over the Waze map in
- * the instrument cluster or the HUD, wherever Waze on cluster (robertn_waze_cluster) shows it.
+ * overlay.js - Cluster Info's panel over the Waze map in the instrument cluster or the HUD, wherever
+ * Waze on cluster (robertn_waze_cluster) shows it, or always on the HUD: the battery's power now (kW and a
+ * small centre-zero bar, when an app provides it - eDrive Live does) and the values chosen (temperatures),
+ * plus the turn signal arrows on the HUD.
  *
- * Setting meterDisplay 'hud' puts it on the HUD instead, whenever there is a reading, wherever the map
- * is (inside the HUD map's picture while the map is on the HUD, else at the HUD's standard map place).
- *
- * By default it follows the map: Waze on cluster writes /run/waze-on-cluster/status.json (state, target,
+ * It follows the map: Waze on cluster writes /run/waze-on-cluster/status.json (state, target,
  * hud_width_pct) whenever that changes; while it says the map is showing, a small image layer
  * (class overlay, above the map) goes on the same target through the cluster render service
  * (cluster_render_client.js), at the bottom or top of the map's picture. Otherwise the layer is
- * hidden, and a hidden layer never asks for a slot, so the badge never shows on its own and never
- * keeps the cluster or HUD from the stock screens. It is hidden too while eDrive has no reading
- * (parked, car asleep, no diagnostic link): eDrive's power reads pause then.
+ * hidden, and a hidden layer never asks for a slot, so the panel never shows on its own and never
+ * keeps the cluster or HUD from the stock screens. With nothing to show (no power, no value: parked,
+ * car asleep) it is hidden too.
  *
  * Updates go at most UPDATE_MS apart and only when what is drawn changes, as the rectangles that
  * changed, so the overlay costs the map's upload budget next to nothing.
@@ -22,7 +21,7 @@ const path = require('path');
 const { Canvas, withAlpha } = require('./kit/canvas');
 const G = require('./kit/gauges');
 
-const STATUS = '/run/waze-on-cluster/status.json';
+const STATUS = process.env.WOC_STATUS || '/run/waze-on-cluster/status.json';   // (the variable: tests)
 const UPDATE_MS = 250;            // the badge redrawn at most this often (4 / s)
 const POLL_MS = 1000;             // status.json read this often (and on every change it is watched for)
 const GO = '#2fd27a';
@@ -79,13 +78,15 @@ function layout(h) {
 }
 
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
-function badgeRect(r, where, target, extras) {
+function badgeRect(r, where, target, extras, hasPower) {
+    if (hasPower === undefined) hasPower = true;
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (battery or oil temperature) adds EXTRA_W of the base width
     let s = target === 'hud' ? Math.max(0.62, Math.min(1, r.w / 640)) : 1.3;
     const size = (sc) => {
         const hh = Math.round(56 * sc / 2) * 2;
-        return [hh, Math.min(Math.ceil(layout(hh).w * (1 + EXTRA_W * (extras || 0)) / 4) * 4, r.w & ~3)];
+        const L = layout(hh), ww = hasPower ? L.w * (1 + EXTRA_W * (extras || 0)) : L.w * EXTRA_W * (extras || 0) + L.pad;
+        return [hh, Math.min(Math.ceil(ww / 4) * 4, r.w & ~3)];
     };
     let [h, w] = size(s);
     // the HUD: it stays right of the speed readout, clear of the car's arrow in the map's middle; a meter too
@@ -100,7 +101,7 @@ function badgeRect(r, where, target, extras) {
     // car's arrow in the middle); on the HUD near the edge of the map's picture, and at the bottom to the right
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
     // (cluster: at the bottom edge, below the car's arrow in the middle of the map, which it covered higher up)
-    const m = target === 'hud' ? Math.round(10 * s) : 6;
+    const m = target === 'hud' ? Math.round(10 * s) : 32;   // (cluster: clear of the dimmed edge below)
     const y = where === 'top' ? r.y + m : r.y + r.h - h - m;
     let x = r.x + Math.floor((r.w - w) / 2);
     if (target === 'hud' && where !== 'top') {
@@ -112,19 +113,22 @@ function badgeRect(r, where, target, extras) {
     return { x, y, w, h };
 }
 
-/** Draws the badge: dark rounded backdrop, kW right-aligned, "kW", then the bar (regen left, use right). */
+/**
+ * Draws the panel: dark rounded backdrop; with pw (the power) the kW right-aligned, "kW", then the bar (regen
+ * left, use right); then the extra values, each a small label over its value. Without pw: the values alone.
+ */
 function drawBadge(cv, t, pw, outMax, inMax, extras) {
     extras = extras || [];
-    const W = cv.w, h = cv.h, L = layout(h), w = Math.round(W / (1 + EXTRA_W * extras.length));
+    const W = cv.w, h = cv.h, L = layout(h), w = pw ? Math.round(W / (1 + EXTRA_W * extras.length)) : 0;
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
-    // the extra values after the bar, each a small label over its value
     const cw = extras.length ? (W - w) / extras.length : 0;
     extras.forEach((e, i) => {
-        const cx = Math.round(w + cw * (i + 0.42));
+        const cx = Math.round(w + cw * (i + (pw ? 0.42 : 0.5)));
         cv.text(e.label, cx, Math.round(h * 0.36), Math.round(h * 0.2), t.dim, { font: 'bold', align: 'center', literal: true });
         cv.text(e.text, cx, Math.round(h * 0.8), Math.round(h * 0.4), e.col || t.text, { font: 'bold', align: 'center', literal: true });
     });
+    if (!pw) return;
     // (the base part is at least as wide as its layout; rounding up to a multiple of 4 goes to the bar)
     const base = Math.round(h * 0.69);
     cv.text(pw.text, L.numR, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
@@ -192,7 +196,12 @@ function packRects(d, w, rects) {
 }
 
 /**
- * ctx: the app's (settings, log, theme); lv: { powerNow(t), limitsNow(), keepFast() } from eDrive Live.
+ * ctx: the app's (settings, log, theme); src: what to show -
+ *   power(t)   { kw, text, col } or null (no app provides it now)
+ *   limits()   { outMax, inMax } the bar's ends in kW
+ *   extras(t)  [{ label, text, col }] the values chosen
+ *   keepFast() the panel is up: providers should read fast (Cluster Info tells them)
+ *   indicator() 'off' | 'left' | 'right' | 'both';  night() true after dark
  * opts (tests): statusPath, ClusterRender, now, setInterval, clearInterval.
  */
 function startOverlay(ctx, lv, opts) {
@@ -200,9 +209,9 @@ function startOverlay(ctx, lv, opts) {
     const { settings, log } = ctx;
     const statusPath = opts.statusPath || STATUS;
     const now = opts.now || Date.now;
-    const where = () => settings.get('mapOverlay') || 'bottom';
-    // 'map': on the display the Waze map is on, while it shows; 'hud': on the HUD whenever there is a reading
-    const onHud = () => settings.get('meterDisplay') === 'hud';
+    const where = () => (settings.get('show') === 'off' ? 'off' : settings.get('place') || 'bottom');
+    // 'map': on the display the Waze map is on, while it shows; 'hud': on the HUD whenever there is something to show
+    const onHud = () => settings.get('show') === 'hud';
     /** Where the badge goes now: { target, pct } (the map's place it sits in), null for nowhere. */
     const place = () => {
         if (onHud()) return { target: 'hud', pct: map.showing && map.target === 'hud' ? map.pct : 0 };
@@ -235,7 +244,7 @@ function startOverlay(ctx, lv, opts) {
         if (!CR) {
             try { CR = require('./cluster_render_client').ClusterRender; } catch (e) { warnOnce('no render client: ' + e.message); return null; }
         }
-        cr = new CR('edrive');
+        cr = new CR('cluster_info');
         // (after a reconnect the client sends each image whole again by itself)
         cr.on('ready', () => tick());
         cr.on('layer', (r, state, reason) => { if (r === ref && state === 'error') warnOnce('layer: ' + (reason || state)); });
@@ -255,11 +264,11 @@ function startOverlay(ctx, lv, opts) {
     /* The HUD extras' opacity: the brightness setting, dimmed at night when nightDim is on. */
     const hudOpacity = () => (Number(settings.get('hudBrightness')) || 100) / 100
         * (settings.get('nightDim') !== 'off' && lv.night && lv.night() ? NIGHT_DIM : 1);
-    function layer(nExtras) {
+    function layer(nExtras, hasPower) {
         const pl = place();
         const r = pl && mapRect(pl.target, pl.pct);
         if (!r) return 0;
-        const b = badgeRect(r, where(), pl.target, nExtras);
+        const b = badgeRect(r, where(), pl.target, nExtras, hasPower);
         const key = [pl.target, b.x, b.y, b.w, b.h].join(',');
         if (key === geo && ref) return ref;
         if (!client()) return 0;
@@ -277,17 +286,17 @@ function startOverlay(ctx, lv, opts) {
 
     function tick() {
         if (where() === 'off' || !place()) return hide();
-        const t = ctx.theme(), pw = lv.powerNow(t);
-        if (!G.isNum(pw.kw)) return hide();               // no reading (parked, asleep, no link): nothing to show
-        const extras = lv.extras ? lv.extras(t) || [] : [];
-        if (!layer(extras.length)) return undefined;
+        const t = ctx.theme(), p = lv.power ? lv.power(t) : null, pw = p && G.isNum(p.kw) ? p : null;
+        const extras = lv.extras ? (lv.extras(t) || []).filter((e) => e && e.text !== '--') : [];
+        if (!pw && !extras.length) return hide();          // nothing to show (parked, asleep, no provider)
+        if (!layer(extras.length, !!pw)) return undefined;
         const op = place().target === 'hud' ? hudOpacity() : 1;
         if (op !== opacity) { opacity = op; cr.set(ref, { opacity }); }
         const tm = now();
         if (visible && tm - lastT < UPDATE_MS - 40) return undefined;    // (the draw timer's jitter)
         lastT = tm;
-        const outMax = settings.get('gaugeKw') || 100, lim = lv.limitsNow();
-        const inMax = Math.max(10, lim && G.isNum(lim.in) && lim.in >= 15 ? lim.in : outMax * 0.5);
+        const lim = (lv.limits && lv.limits()) || {};
+        const outMax = G.isNum(lim.outMax) && lim.outMax > 0 ? lim.outMax : 100, inMax = G.isNum(lim.inMax) && lim.inMax > 0 ? lim.inMax : outMax * 0.5;
         drawBadge(cv, t, pw, outMax, inMax, extras);
         const d = cv.d;
         if (!last) {

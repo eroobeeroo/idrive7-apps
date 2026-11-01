@@ -2,7 +2,7 @@
   "id": "edrive2",
   "title": "eDrive Live",
   "description": "Live HV battery power (kW), cell temperatures and voltages, power limits and climate / HVAC power use - set up for the X5 xDrive45e (G05 PHEV)",
-  "version": "1.5.114",
+  "version": "1.6.0",
   "vendor": "custom",
   "loggingId": "OA9D",
   "iconGlyph": "battery",
@@ -52,17 +52,6 @@
     },
     "de.bmw.infotainment.lsc.LSCDataSink": {
       "statusHighVoltageStorage": "s"
-    },
-    "de.bmw.body.Light": {
-      "StatusFunctionsIndicators": "s",
-      "StatusFunctionsIndicators2": "s"
-    },
-    "de.bmw.infotainment.vehicle.Vehicle": {
-      "statusDayNightChangeOver": "rs"
-    },
-    "de.bmw.infotainment.personalization.SessionManager": {
-      "_instances": "de.bmw.infotainment.personalization.SessionManager",
-      "currentUserAccountReference": "r"
     }
   },
   "startWidget": {
@@ -185,96 +174,8 @@
       ]
     },
     {
-      "key": "meterDisplay",
-      "label": "kW meter on the cluster / HUD",
-      "type": "choice",
-      "default": "map",
-      "options": [
-        [
-          "map",
-          "Where the Waze map is"
-        ],
-        [
-          "hud",
-          "Always on the HUD"
-        ]
-      ]
-    },
-    {
-      "key": "mapOverlay",
-      "label": "kW meter over the Waze map: place",
-      "type": "choice",
-      "default": "bottom",
-      "options": [
-        [
-          "bottom",
-          "Bottom of the map"
-        ],
-        [
-          "top",
-          "Top of the map"
-        ],
-        [
-          "off",
-          "Off"
-        ]
-      ]
-    },
-    {
-      "key": "turnSignals",
-      "label": "Turn signal arrows on the HUD",
-      "type": "choice",
-      "default": "on",
-      "options": [
-        [
-          "on",
-          "On"
-        ],
-        [
-          "off",
-          "Off"
-        ]
-      ]
-    },
-    {
-      "key": "meterExtra",
-      "label": "Map meter: also show",
-      "type": "choice",
-      "default": "none",
-      "options": [
-        [
-          "none",
-          "Nothing else"
-        ],
-        [
-          "battery",
-          "Battery temperature"
-        ],
-        [
-          "oil",
-          "Engine oil temperature"
-        ],
-        [
-          "battery+oil",
-          "Battery and oil temperature"
-        ]
-      ]
-    },
-    {
-      "key": "hudBrightness",
-      "label": "HUD meter and arrows: brightness",
-      "type": "number",
-      "unit": "%",
-      "default": 100,
-      "steps": [
-        100,
-        75,
-        50
-      ]
-    },
-    {
-      "key": "nightDim",
-      "label": "HUD meter and arrows: dimmer at night",
+      "key": "clusterInfo",
+      "label": "Send power and temperatures to Cluster Info",
       "type": "choice",
       "default": "on",
       "options": [
