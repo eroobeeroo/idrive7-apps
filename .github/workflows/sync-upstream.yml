@@ -2,7 +2,7 @@
 # New upstream commits are merged on the branch sync/upstream with this fork's own rules applied
 # (.github/sync/resolve.sh), the fork's tests run (.github/sync/test.sh), and a pull request is opened for
 # you to merge - main is never changed by this job. A merge it can't finish by its rules, or failing tests,
-# opens an issue instead, naming the files.
+# fails the run with the reason in its summary, so GitHub emails you (forks have issues switched off).
 name: Sync upstream
 
 on:
@@ -13,7 +13,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
 
 concurrency:
   group: sync-upstream
@@ -101,29 +100,35 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
             gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
-          elif ! gh pr create --base main --head "$BRANCH" --title "Sync with $UPSTREAM" --body-file "$RUNNER_TEMP/body.md"; then
-            # Actions may not open pull requests in this repository (Settings > Actions > General): say so in an issue
-            echo >> "$RUNNER_TEMP/body.md"
-            echo "Open the pull request: https://github.com/$GITHUB_REPOSITORY/compare/main...$BRANCH" >> "$RUNNER_TEMP/body.md"
-            gh issue create --title "Sync with $UPSTREAM ready to merge" --body-file "$RUNNER_TEMP/body.md"
+            cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+          elif gh pr create --base main --head "$BRANCH" --title "Sync with $UPSTREAM" --body-file "$RUNNER_TEMP/body.md"; then
+            cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Actions may not open pull requests here (Settings > Actions > General > "Allow GitHub Actions to
+            # create and approve pull requests"): the branch is ready, open it by hand - and fail so you hear of it
+            {
+              echo "**The merge is ready on the branch $BRANCH, but this job may not open the pull request.**"
+              echo "Open it: https://github.com/$GITHUB_REPOSITORY/compare/main...$BRANCH"
+              echo "(or allow it: Settings > Actions > General > Allow GitHub Actions to create and approve pull requests)"
+              echo
+              cat "$RUNNER_TEMP/body.md"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Report what needs a hand
         if: steps.merge.outputs.result == 'conflict' || steps.test.outputs.result == 'fail'
         env:
-          GH_TOKEN: ${{ github.token }}
           WHY: ${{ steps.merge.outputs.result == 'conflict' && 'conflict' || 'tests' }}
         run: |
           {
             if [ "$WHY" = conflict ]; then
-              echo "The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) stopped: these files changed both here and upstream, and the fork's rules can't decide them. Nothing was changed."
+              echo "**The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) stopped:** these files changed both here and upstream, and the fork's rules can't decide them. Nothing was changed."
               echo; echo '```'; cat "$RUNNER_TEMP/conflicts.txt"; echo '```'
             else
-              echo "The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) merged, but the fork's tests failed. Nothing was changed."
+              echo "**The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) merged, but the fork's tests failed.** Nothing was changed."
               echo; echo '<details><summary>Test output (last 200 lines)</summary>'; echo; echo '```'; cat "$RUNNER_TEMP/test.log"; echo '```'; echo '</details>'
             fi
             echo; echo "### Upstream changes"; cat "$RUNNER_TEMP/upstream-log.md"
-          } > "$RUNNER_TEMP/issue.md"
-          title="Sync with $UPSTREAM needs a hand"
-          n=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
-          if [ -n "$n" ]; then gh issue comment "$n" --body-file "$RUNNER_TEMP/issue.md"; else gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
