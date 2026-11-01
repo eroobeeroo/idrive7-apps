@@ -1,0 +1,129 @@
+# Keeps this fork in step with the original (UPSTREAM below): every night, and on demand from the Actions tab.
+# New upstream commits are merged on the branch sync/upstream with this fork's own rules applied
+# (.github/sync/resolve.sh), the fork's tests run (.github/sync/test.sh), and a pull request is opened for
+# you to merge - main is never changed by this job. A merge it can't finish by its rules, or failing tests,
+# opens an issue instead, naming the files.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 7 * * *'          # every night, 07:17 UTC (02:17 / 03:17 in Detroit)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: cauliflowermossgrape/idrive7-apps
+  BRANCH: sync/upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch the original
+        id: fetch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          git fetch --no-tags upstream main
+          n=$(git rev-list --count HEAD..upstream/main)
+          echo "new=$n" >> "$GITHUB_OUTPUT"
+          echo "Upstream commits not in main: $n"
+          git log --format='- %s' HEAD..upstream/main > "$RUNNER_TEMP/upstream-log.md" || true
+
+      - name: Merge with the fork's rules
+        id: merge
+        if: steps.fetch.outputs.new != '0'
+        run: |
+          git checkout -B "$BRANCH"
+          if git merge --no-ff --no-edit -m "Merge $UPSTREAM (automatic sync)" upstream/main; then
+            echo "Merged cleanly."
+          else
+            bash .github/sync/resolve.sh
+            left=$(git diff --name-only --diff-filter=U)
+            if [ -n "$left" ]; then
+              echo "$left" > "$RUNNER_TEMP/conflicts.txt"
+              echo "result=conflict" >> "$GITHUB_OUTPUT"
+              git merge --abort
+              exit 0
+            fi
+            git commit --no-edit
+          fi
+          bash .github/sync/resolve.sh --after
+          if ! git diff --quiet HEAD; then git commit -am "Sync: the fork's rules after the merge"; fi
+          echo "result=merged" >> "$GITHUB_OUTPUT"
+
+      - name: Test the merge
+        id: test
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          set -o pipefail
+          if bash .github/sync/test.sh 2>&1 | tail -n 200 > "$RUNNER_TEMP/test.log"; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the pull request
+        if: steps.test.outputs.result == 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git push --force origin "$BRANCH"
+          {
+            echo "Automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM). The fork's rules were applied and its tests passed."
+            echo
+            echo "Merge this to bring main up to date (then run the Release workflow if the fork publishes releases)."
+            echo
+            echo "### Upstream changes"
+            cat "$RUNNER_TEMP/upstream-log.md"
+          } > "$RUNNER_TEMP/body.md"
+          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+          elif ! gh pr create --base main --head "$BRANCH" --title "Sync with $UPSTREAM" --body-file "$RUNNER_TEMP/body.md"; then
+            # Actions may not open pull requests in this repository (Settings > Actions > General): say so in an issue
+            echo >> "$RUNNER_TEMP/body.md"
+            echo "Open the pull request: https://github.com/$GITHUB_REPOSITORY/compare/main...$BRANCH" >> "$RUNNER_TEMP/body.md"
+            gh issue create --title "Sync with $UPSTREAM ready to merge" --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Report what needs a hand
+        if: steps.merge.outputs.result == 'conflict' || steps.test.outputs.result == 'fail'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHY: ${{ steps.merge.outputs.result == 'conflict' && 'conflict' || 'tests' }}
+        run: |
+          {
+            if [ "$WHY" = conflict ]; then
+              echo "The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) stopped: these files changed both here and upstream, and the fork's rules can't decide them. Nothing was changed."
+              echo; echo '```'; cat "$RUNNER_TEMP/conflicts.txt"; echo '```'
+            else
+              echo "The automatic sync with [$UPSTREAM](https://github.com/$UPSTREAM) merged, but the fork's tests failed. Nothing was changed."
+              echo; echo '<details><summary>Test output (last 200 lines)</summary>'; echo; echo '```'; cat "$RUNNER_TEMP/test.log"; echo '```'; echo '</details>'
+            fi
+            echo; echo "### Upstream changes"; cat "$RUNNER_TEMP/upstream-log.md"
+          } > "$RUNNER_TEMP/issue.md"
+          title="Sync with $UPSTREAM needs a hand"
+          n=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file "$RUNNER_TEMP/issue.md"; else gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"; fi
