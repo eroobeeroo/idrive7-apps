@@ -31,7 +31,8 @@ const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
-const ARROW = { w: 28, h: 20, y: 148, left: 350, right: 422 };
+const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster's proportions (5:4)
+const INDICATOR_GREEN = '#22d046';   // the cluster's indicator green
 const BLINK_MS = 375;             // on, then off, this long each (about the car's own rate)
 const ARROW_TICK_MS = 60;
 
@@ -94,13 +95,20 @@ function drawBadge(cv, t, pw, outMax, inMax) {
     cv.fillRect(Math.round(x0) - 1, by - 3, 2, bh + 6, t.text);
 }
 
-/** A turn signal arrow pointing left or right, green, w x h, on a transparent ground. */
+/**
+ * A turn signal arrow pointing left or right, w x h, on a transparent ground: the shape of the iDrive 7
+ * cluster's own (the standard indicator arrow, solid green: a triangle head the arrow's full height and a bit
+ * over half its length, a shaft a little over two fifths of its height), scaled down for the HUD.
+ */
 function drawArrow(cv, dir) {
-    const w = cv.w, h = cv.h, m = h * 0.08, head = w * 0.5, bar = h * 0.36;
+    const w = cv.w, h = cv.h, m = 1;            // 1 px clear for the anti-aliased edge
+    const L = w - 2 * m, H = h - 2 * m, head = L * 0.56, bar = H * 0.42;
     cv.clear([0, 0, 0, 0]);
     const tip = dir === 'left' ? m : w - m, base = dir === 'left' ? m + head : w - m - head, end = dir === 'left' ? w - m : m;
-    cv.convex([[tip, h / 2], [base, m], [base, h - m]], GO);
-    cv.fillRect(Math.min(base, end), h / 2 - bar / 2, Math.abs(end - base) + (dir === 'left' ? 1 : 0), bar, GO);
+    cv.convex([[tip, h / 2], [base, m], [base, h - m]], INDICATOR_GREEN);
+    // the shaft overlaps the head by a pixel, so no seam shows between them
+    const x0 = Math.min(base, end) - (dir === 'left' ? 1 : 0), x1 = Math.max(base, end) + (dir === 'left' ? 0 : 1);
+    cv.fillRect(x0, h / 2 - bar / 2, x1 - x0, bar, INDICATOR_GREEN);
 }
 
 /** The rectangles where a and b (RGBA, w wide) differ: one per band split at `cut`, null when equal. */
