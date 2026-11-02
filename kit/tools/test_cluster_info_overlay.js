@@ -253,6 +253,12 @@ class FakeCR extends EventEmitter {
     check('nothing sent between flashes', () => assert.strictEqual(sets(), n0));
     ind = 'both'; t += 10; ov._arrowTick();
     check('hazards: both lit', () => assert(la.opacity === 1 && ra.opacity === 1));
+    // the flash edges where the cluster's are (measured: 640 ms a flash, 638 by the head unit's clock, lit 335, the
+    // head unit told 40 ms after the cluster's first flash)
+    const seq = [];
+    ind = 'right'; ov._arrowTick(); seq.push(ra.opacity);
+    for (const dt of [290, 10, 290, 10]) { t += dt; ov._arrowTick(); seq.push(ra.opacity); }
+    check('flash timing: lit to 295 ms after the stalk news, dark, lit again from 598 ms', () => assert.deepStrictEqual(seq, [1, 1, 0, 0, 1]));
     ind = 'off'; t += 10; ov._arrowTick();
     check('let go: dark, still placed for a moment', () => assert(la.opacity === 0 && ov.arrows().shown));
     t += 1300; ov._arrowTick();

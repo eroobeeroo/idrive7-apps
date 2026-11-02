@@ -38,7 +38,10 @@ const ARROW = { w: 30, h: 24, y: 146, left: 349, right: 421 };   // the cluster'
 const INDICATOR_GREEN = '#22d046';   // the cluster's indicator green
 const EXTRA_COL = 1.0;            // an extra value's column, of the panel's height (fits "188°")             // an extra value's column, of the meter's base width
 const NIGHT_DIM = 0.6;            // the HUD extras at night, of their brightness by day
-const BLINK_ON_MS = 335, BLINK_OFF_MS = 300;   // the cluster's own arrow, measured from a video (G05): 635 ms a flash
+// the cluster's own arrow, measured over 39 flashes of a video (G05): 640 ms a flash, lit 335 of them. By the head
+// unit's clock that is 638 (its clock ran ~0.3 % behind the cluster's flasher there), and the car tells the head unit
+// of the stalk about 40 ms after the cluster's first flash, so the HUD starts its flashing that far in
+const BLINK_ON_MS = 335, BLINK_OFF_MS = 303, BLINK_LEAD_MS = 40;
 const ARROW_TICK_MS = 25;        // (the flash edges within 25 ms of the cluster's)
 
 /** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
@@ -387,7 +390,7 @@ function startOverlay(ctx, lv, opts) {
             else if (arrowsShown && lastPhase !== false) { ['left', 'right'].forEach((d) => cr.set(arrows[d], { opacity: 0 })); lastPhase = false; }
             return;
         }
-        if (dir !== lastDir) { blinkFrom = tm; lastDir = dir; lastPhase = null; }
+        if (dir !== lastDir) { blinkFrom = tm - BLINK_LEAD_MS; lastDir = dir; lastPhase = null; }
         if (!arrowLayers()) return;
         if (!arrowsShown) { ['left', 'right'].forEach((d) => cr.set(arrows[d], { visible: true, opacity: 0 })); arrowsShown = true; }
         const on = (tm - blinkFrom) % (BLINK_ON_MS + BLINK_OFF_MS) < BLINK_ON_MS;
