@@ -318,10 +318,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (process.env.SHOW) console.log(JSON.stringify(g05));
     S.pattern = 'sides';
     const sides = await run(1500);
-    check('side to side: each side\'s lamps on together, two flashes, then the other side', () => {
-        const on = sides.filter((x) => /^2F E3 B5 03 (1E|1F|0B|0C) 01 /.test(x)).map((x) => x.slice(12, 14));
-        assert(on.slice(0, 4).join() === '1E,0B,1E,0B' && on.slice(4, 8).join() === '1F,0C,1F,0C', on.join(' '));
-        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 0F 01') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 0F 01'), 'high beams each side');
+    check('side to side: a whole side\'s turn signals by its lamp function, two flashes left, two right, one request a flash', () => {
+        const fl = sides.filter((x) => /^2E D5 42 00 0[67] /.test(x)).map((x) => x.slice(12, 14));
+        assert(fl.slice(0, 4).join() === '06,06,07,07', fl.join(' ') + ' | ' + sides.join(' | '));
+        assert(!sides.some((x) => /^2F E3 B5 03 .. 00 /.test(x)), 'nothing to switch off');
+    });
+    check('the check\'s flash tries: three headlight flashing modes in the left headlight, two body controller flashing functions', () => {
+        assert(saved._flashTries.length === 5, JSON.stringify(saved._flashTries));
     });
     check('the G05 as answered: every pattern lights lamps', () => Object.keys(g05).forEach((id) => assert(g05[id].lamps > 0 && !g05[id].error, id + ' ' + JSON.stringify(g05[id]))));
     S.pattern = 'wigwag';

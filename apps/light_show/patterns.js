@@ -35,14 +35,12 @@ const PATTERNS = [
             'tailL', 'tailR', 'rfogL', 'rfogR', 'revL', 'revR', 'plate'), f(400)] },
     // burst: each frame's lamps lit by their lamp functions all at once (both sides together), each for the frame's
     // time and then dark by itself - fast, where switching a dozen lamps one by one (~300 ms a request) can't be
-    { id: 'strobe', name: 'Strobe', kind: 'show', burst: true, what: 'Reversing, fog, low, high, daytime lights and turn signals together, flashing fast',
+    { id: 'strobe', name: 'Strobe', kind: 'show', burst: true, what: 'Reversing, fog, low, high, daytime lights and turn signals, both sides, in quick turn',
         frames: [f(150, 'revL', 'fogL', 'lowL', 'highL', 'drlL', 'indFL', 'indFR'), f(150)] },
-    // parallel: each frame's changes sent all at once (the lamps going dark together, then the ones coming on), so a
-    // side's lamps flash together; each lamp its own side (reversing and fog lights by the body controller's outputs,
-    // the high beam and front turn signal by the side's headlight)
-    { id: 'sides', name: 'Side to side', kind: 'show', parallel: true, what: 'Reversing, fog, high beam and front turn signal: two flashes left, two right',
-        frames: [f(110, 'revL', 'fogL', 'highL', 'indFL'), f(90), f(110, 'revL', 'fogL', 'highL', 'indFL'), f(200),
-            f(110, 'revR', 'fogR', 'highR', 'indFR'), f(90), f(110, 'revR', 'fogR', 'highR', 'indFR'), f(200)] },
+    // a whole side's turn signals (front, mirror, rear) by its own lamp function: one request a flash, dark again by
+    // itself - the fastest side to side the car allows (it takes one request at a time, ~300 ms each)
+    { id: 'sides', name: 'Side to side', kind: 'show', burst: true, what: 'A whole side\'s turn signals: two flashes left, two right',
+        frames: [f(150, 'indFL'), f(60), f(150, 'indFL'), f(200), f(150, 'indFR'), f(60), f(150, 'indFR'), f(200)] },
     { id: 'blink', name: 'Blink', kind: 'show', what: 'Headlights and tail lights dark, then a flash, like a wink',
         frames: [f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
 ];
@@ -98,7 +96,7 @@ class Player {
             const p = this.pattern, fr = p.frames[i % p.frames.length];
             if (p.burst) {
                 // lamp functions, all at once, dark again by themselves
-                if (fr.on.length) { await this.link.burst(fr.on, fr.ms / this.speed + 40); this.lit = new Set(fr.on.concat(fr.on.map((id) => id.replace(/L$/, 'R')))); }
+                if (fr.on.length) { await this.link.burst(fr.on, fr.ms / this.speed + 40); this.lit = new Set(fr.on.concat(fr.on.filter((id) => id !== 'indFL').map((id) => id.replace(/L$/, 'R')))); }
                 else this.lit = new Set();
                 if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
                 this.frames++;
@@ -116,18 +114,8 @@ class Player {
                 if (r.ok) darkSent.add(id);
             }
             // lamps going dark first (a frame never has two sides lit at once), then the ones coming on
-            if (p.parallel) {
-                // all at once: the dark ones together, then the lit ones together
-                const going = Array.from(this.lit).filter((id) => !want.has(id) && !this._fn(id));
-                await Promise.all(going.map((id) => this.link.set(id, false, offAs, fr.ms / this.speed, true)));
-                going.forEach((id) => this.lit.delete(id));
-                const coming = Array.from(want).filter((id) => !this.lit.has(id) && !this._fn(id));
-                const rs = this.running ? await Promise.all(coming.map((id) => this.link.set(id, true, null, fr.ms / this.speed, true))) : [];
-                rs.forEach((r, k) => { if (r.ok) this.lit.add(coming[k]); else if (r.nrc !== null && this.opts.refused) this.opts.refused(coming[k], r.nrc); });
-                want.forEach((id) => { if (this._fn(id)) this.link.fn(id, fr.ms / this.speed + 60); });
-            }
             for (const id of Array.from(this.lit)) if (!want.has(id)) { if (!this._fn(id)) await this.link.set(id, false, offAs); this.lit.delete(id); }
-            for (const id of (p.parallel ? [] : want)) {
+            for (const id of want) {
                 if (!this.running) break;
                 if (this.lit.has(id)) continue;
                 const r = this._fn(id) ? await this.link.fn(id, fr.ms / this.speed + 60) : await this.link.set(id, true, null, fr.ms / this.speed);

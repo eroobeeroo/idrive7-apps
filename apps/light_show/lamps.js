@@ -68,13 +68,18 @@ LAMPS.concat(BRAKES).forEach((l) => { BY_ID[l.id] = l; });
 // high beam alternatives the lamp check tries in the left headlight (A-D on its page: which lit is told back by the
 // driver): Fernlichtblinken, Fernlicht Modus 1a / 2a / 3a
 const HIGH_TRIES = [0x45, 0x0F, 0x11, 0x13];
-const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES);
+// the headlights' own flashing modes (one request, the module flashes by itself): the lamp check's flash tries
+const FLM_FLASH = { panic: 0x48, alarm: 0x47, holdup: 0x46 };   // Panik-Modus, DWA-Blinken, Überfallalarm
+const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES, Object.values(FLM_FLASH));
 const STATE_DID = [0xE3, 0xB9];           // LICHT_AUSGANG_DIGITAL: one byte an output (its number), 1 on
 
 /** Lamp functions (TAB_LEUCHTEN_FUNKTION_ARG) for 0xD542. */
 const FN = { lowL: 0x03, lowR: 0x03, highL: 0x05, highR: 0x05, drlL: 0x04, drlR: 0x04, fogL: 0x08, fogR: 0x08,
     indFL: 0x06, indSL: 0x06, indRL: 0x06, indFR: 0x07, indSR: 0x07, indRR: 0x07,
     rfogL: 0x0E, rfogR: 0x0E, revL: 0x0F, revR: 0x0F };
+
+/** The body controller's own flashing functions (0xD542): SPECIAL_FUNCTION_FLASHING, REVERSING_FLASH */
+const BDC_FLASH = { special: 0x1C, reversing: 0x1B };
 
 /** The body controller output request's layouts tried, in order (after 2F E3 B5; E output, A 01 on / 00 off). */
 const LAYOUTS = [
@@ -141,7 +146,7 @@ function check(target, bytes) {
             if (LAYOUTS.some((lay) => lay.b[0] === 0x03 && fits(body, [0x00].concat(lay.b.slice(1)), true))) return;
             if (fits(body, [0x00]) || fits(body, [0x00, 'E'], true)) return;
         }
-        if (Object.values(FN).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7)) return;
+        if (Object.values(FN).concat(Object.values(BDC_FLASH)).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7)) return;
         throw bad();
     }
     if (sid === 0x2E && bytes.length === 6 && bytes[1] === LV_DID[0] && bytes[2] === LV_DID[1] && bytes[3] === 0x00 && LVS.indexOf(bytes[4]) >= 0 && bytes[5] <= 2) return;
@@ -188,7 +193,8 @@ class LampLink {
             this.stats.ok++;
             return { ok: true, nrc: null, ms, reply: u };
         };
-        if (parallel) return run();
+        // (parallel: no - on a G05 the transport took one of several requests sent together and dropped the rest;
+        // every request waits its turn)
         const p = this.queue.then(run, run);
         this.queue = p.catch(() => null);
         return p;
@@ -335,10 +341,14 @@ class LampLink {
      * A flash of these lamps' functions, all at once: each lamp function once (both sides - the turn signals a side
      * each), sent together, every one for ms and then the car's own again by itself (nothing to switch off).
      */
-    burst(ids, ms) {
+    async burst(ids, ms) {
         const codes = Array.from(new Set(ids.map((id) => FN[id]).filter((c) => c !== undefined)));
-        return Promise.all(codes.map((c) => this.request(BDC, req.fn(c, ms), true)));
+        const out = [];
+        for (const c of codes) out.push(await this.request(BDC, req.fn(c, ms)));       // (one at a time: see request)
+        return out;
     }
+    /** a body controller flashing function (BDC_FLASH) for ms */
+    flashFn(code, ms) { return this.request(BDC, req.fn(code, ms)); }
     /** one headlight module's light function for s seconds (0: off): the lamp check's high beam tries */
     async lvTry(ecu, lv, s) { await this.enter(ecu); return this.request(ecu, req.lv(lv, s)); }
     /** a body controller lamp function for ms (both sides, except the turn signals), then the car's own again */
@@ -357,4 +367,4 @@ class LampLink {
     }
 }
 
-module.exports = { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };
+module.exports = { LampLink, FLM_FLASH, BDC_FLASH, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };

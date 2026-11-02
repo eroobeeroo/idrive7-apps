@@ -17,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUT, hex, why } = require('./lamps');
+const { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUT, FLM_FLASH, BDC_FLASH, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
 
 const W = 1600, H = 520;
@@ -164,6 +164,26 @@ mgu.run({
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
             }
             // the high beams lit by nothing so far: four other functions in the left headlight, A to D, 1.5 s each
+            // the car's own flashing modes, A to E, 2.5 s each (one request, the unit flashes by itself): the driver says
+            // which flashed - a fast strobe needs one of them (the car takes ~3 requests a second)
+            const TRIES = [
+                { what: 'left headlight, Panik-Modus', ecu: FLM_L, lv: FLM_FLASH.panic, lamps: ['highL', 'lowL'] },
+                { what: 'left headlight, alarm flashing', ecu: FLM_L, lv: FLM_FLASH.alarm, lamps: ['highL', 'lowL'] },
+                { what: 'left headlight, hold-up alarm', ecu: FLM_L, lv: FLM_FLASH.holdup, lamps: ['highL', 'lowL'] },
+                { what: 'body controller, special flashing', fn: BDC_FLASH.special, lamps: ['indFL', 'indFR', 'indRL', 'indRR'] },
+                { what: 'body controller, reversing flash', fn: BDC_FLASH.reversing, lamps: ['revL', 'revR'] },
+            ];
+            checked._flashTries = [];
+            for (let i = 0; i < TRIES.length && check.running; i++) {
+                const tr = TRIES[i], L = 'ABCDE'[i];
+                check.at = -1; check.step = 'Flash try ' + L + ' of A-E: ' + tr.what + ' (did it flash?)'; lit = new Set(tr.lamps);
+                const r = tr.ecu ? await link.lvTry(tr.ecu, tr.lv, 2) : await link.flashFn(tr.fn, 2500);
+                checked._flashTries.push(L + ' ' + why(r));
+                await new Promise((res) => setTimeout(res, 2500));
+                if (tr.ecu) await link.lvTry(tr.ecu, tr.lv, 0);
+                lit = new Set();
+                await new Promise((res) => setTimeout(res, 800));
+            }
             check.step = null;
             save();
             await link.stop();
@@ -301,7 +321,7 @@ mgu.run({
                 const prLine = pr ? 'Output request: ' + pr.map((x) => x.id + ' ' + x.why).join('  ·  ') + (checked._layout || (check.running && link.layout) ? '' : '  -  none taken') : '';
                 const tm = check.running ? link.timer : checked._timer, tt = check.running ? link.timerTried : checked._timerTried;
                 const tmLine = tt ? 'Time byte: ' + tt.join(', ') + (tm ? '  -  ' + tm.unitMs + ' ms a step: lamps go back by themselves' : '  -  not a time') : '';
-                const hb = '';
+                const hb = checked._flashTries ? '   ·   Flash tries: ' + checked._flashTries.join(', ') : '';
                 cv.text(prLine, 56, 470, 13, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
                 cv.text(tmLine + hb, 56, 488, 13, tm ? GO : t.dim, { literal: true });
                 cv.text(linkLine, 56, 505, 13, t.dim, { literal: true });

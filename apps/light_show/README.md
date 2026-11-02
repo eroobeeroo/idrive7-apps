@@ -47,6 +47,10 @@ transport.
 - **Read on / read OFF** under each lamp: what the body controller says the output is while it should be lit.
 - (The high beams use Fernlicht Modus 1a: an earlier check's tries in the left headlight found it - Fernlichtblinken
   was taken and nothing lit.)
+- **Flash tries A-E** (2.5 s each): the car's own flashing modes, one request each - the left headlight's Panik-Modus,
+  alarm flashing and hold-up alarm, the body controller's special flashing and reversing flash. The driver says which
+  flashed. (The car takes one request at a time, ~300 ms each - several sent together, only the first is taken - so
+  a fast strobe needs a mode that flashes by itself.)
 - Afterwards the brake lights are read: still on (pedal not pressed) = stuck, a red bar on both pages.
 
 A **light show** starts dark: lamps on before it (read from the body controller) are held off while it runs - never
