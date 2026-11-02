@@ -397,6 +397,14 @@ def build(app_id, language='en'):
             'userLoginRequired': False, 'backgroundPriority': 200, 'someipManifest': 'manifest.json',
         },
     }
+    # app.json "startType": how the MGU Store's manager lists the app - "manually" (default: opened from its tile),
+    # "autostart" (starts with the head unit, started again if it stops, never stopped for being in the
+    # background) or "lum"
+    st = spec.get('startType')
+    if st is not None:
+        if st not in ('manually', 'autostart', 'lum'):
+            sys.exit(app_id + ': startType must be manually, autostart or lum, not ' + str(st))
+        pkg['mguAppStartType'] = st
     json.dump(pkg, open(os.path.join(src, 'package.json'), 'w', encoding='utf-8', newline='\n'), indent=2)
     json.dump(manifest, open(os.path.join(src, 'manifest.json'), 'w', encoding='utf-8', newline='\n'), indent=2)
     shutil.copy(os.path.join(KIT, 'platform', 'permissions.json'), os.path.join(src, 'permissions.json'))
