@@ -45,33 +45,35 @@ const LAMPS = [
     // aren't on its outputs: only the left / right turn signal function reaches them)
     { id: 'indSL', out: 0x10, outDark: true, name: 'Side repeater left', end: 'side', side: 'L' },
     { id: 'indSR', out: 0x11, outDark: true, name: 'Side repeater right', end: 'side', side: 'R' },
-    { id: 'indRL', out: 0x20, name: 'Turn signal rear left', end: 'rear', side: 'L' },
-    { id: 'indRR', out: 0x21, name: 'Turn signal rear right', end: 'rear', side: 'R' },
+    // (the rear turn signals: on a G05 their outputs were taken and nothing lit, like the mirrors')
+    { id: 'indRL', out: 0x20, outDark: true, name: 'Turn signal rear left', end: 'rear', side: 'L' },
+    { id: 'indRR', out: 0x21, outDark: true, name: 'Turn signal rear right', end: 'rear', side: 'R' },
     { id: 'tailL', out: 0x14, name: 'Tail light left', end: 'rear', side: 'L', usual: 'on' },
     { id: 'tailR', out: 0x15, name: 'Tail light right', end: 'rear', side: 'R', usual: 'on' },
-    { id: 'brakeL', out: 0x18, name: 'Brake light left', end: 'rear', side: 'L', usual: 'brake' },
-    { id: 'brakeR', out: 0x19, name: 'Brake light right', end: 'rear', side: 'R', usual: 'brake' },
-    { id: 'brakeM', out: 0x23, name: 'Third brake light', end: 'rear', side: 'M', usual: 'brake' },
     { id: 'rfogL', out: 0x1C, name: 'Rear fog light left', end: 'rear', side: 'L' },
     { id: 'rfogR', out: 0x1D, name: 'Rear fog light right', end: 'rear', side: 'R' },
     { id: 'revL', out: 0x1E, name: 'Reversing light left', end: 'rear', side: 'L' },
     { id: 'revR', out: 0x1F, name: 'Reversing light right', end: 'rear', side: 'R' },
     { id: 'plate', out: 0x22, name: 'Number plate light', end: 'rear', side: 'M', usual: 'on' },
 ];
+/** The brake lights: never switched (on a G05 they stayed on every time - the body controller won't give them
+ *  back). Only read (stuck?) and offered every give-back form by Give lamps back. */
+const BRAKES = [
+    { id: 'brakeL', out: 0x18, name: 'Brake light left', end: 'rear', side: 'L', usual: 'brake' },
+    { id: 'brakeR', out: 0x19, name: 'Brake light right', end: 'rear', side: 'R', usual: 'brake' },
+    { id: 'brakeM', out: 0x23, name: 'Third brake light', end: 'rear', side: 'M', usual: 'brake' },
+];
 const BY_ID = {};
-LAMPS.forEach((l) => { BY_ID[l.id] = l; });
+LAMPS.concat(BRAKES).forEach((l) => { BY_ID[l.id] = l; });
 // high beam alternatives the lamp check tries in the left headlight (A-D on its page: which lit is told back by the
 // driver): Fernlichtblinken, Fernlicht Modus 1a / 2a / 3a
 const HIGH_TRIES = [0x45, 0x0F, 0x11, 0x13];
-// the front left turn signal: on a G05 the left headlight's Blinken (0x49) didn't light while the right one's did -
-// the lamp check tries Blinken and Blinken 2 (0x4A) in the left headlight, A and B: the driver says which lit
-const BLINK_TRIES = [0x49, 0x4A];
-const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES, BLINK_TRIES);
+const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES);
 const STATE_DID = [0xE3, 0xB9];           // LICHT_AUSGANG_DIGITAL: one byte an output (its number), 1 on
 
 /** Lamp functions (TAB_LEUCHTEN_FUNKTION_ARG) for 0xD542. */
 const FN = { lowL: 0x03, lowR: 0x03, highL: 0x05, highR: 0x05, drlL: 0x04, drlR: 0x04, fogL: 0x08, fogR: 0x08,
-    indFL: 0x06, indSL: 0x06, indRL: 0x06, indFR: 0x07, indSR: 0x07, indRR: 0x07, brakeL: 0x0C, brakeR: 0x0C, brakeM: 0x0C,
+    indFL: 0x06, indSL: 0x06, indRL: 0x06, indFR: 0x07, indSR: 0x07, indRR: 0x07,
     rfogL: 0x0E, rfogR: 0x0E, revL: 0x0F, revR: 0x0F };
 
 /** The body controller output request's layouts tried, in order (after 2F E3 B5; E output, A 01 on / 00 off). */
@@ -86,7 +88,7 @@ const LAYOUTS = [
 ];
 const LAYOUT = {};
 LAYOUTS.forEach((x) => { LAYOUT[x.id] = x; });
-const PROBE_LAMP = 'indRL';               // a lamp every car has, harmless to flash: the layout probe's
+const PROBE_LAMP = 'revL';                // a lamp every car has, harmless to flash parked: the layout probe's
 
 const NRC = { 0x10: 'refused', 0x11: 'not supported', 0x12: 'not supported', 0x13: 'wrong length', 0x22: 'conditions not correct',
     0x31: 'out of range', 0x33: 'locked (security access)', 0x7E: 'not in this session', 0x7F: 'not in this session' };
@@ -126,15 +128,18 @@ function check(target, bytes) {
     if (sid === 0x3E && bytes.length === 2 && a === 0x00) return;
     if (target === BDC) {
         if (key === '22 E3 B9') return;
-        const outs = LAMPS.map((l) => l.out);
+        const outs = LAMPS.map((l) => l.out), all = outs.concat(BRAKES.map((l) => l.out));
         // an output request: a layout's shape (E a lamp output, A on / off / 0x40, T any time byte, the rest as is),
         // or one with 00 for its control parameter; or return control (00, 00 <output>)
-        const fits = (body, shape) => body.length === shape.length && shape.every((x, i) => (x === 'E' ? outs.indexOf(body[i]) >= 0
-            : x === 'A' ? [0, 1, 0x40].indexOf(body[i]) >= 0 : x === 'T' ? true : body[i] === x));
+        // (the brake lights: only the give-back forms - 0x40, or control parameter 00 - never on or off)
+        const fits = (body, shape, back) => body.length === shape.length && shape.every((x, i) => (x === 'E' ? (back ? all : outs).indexOf(body[i]) >= 0
+            : x === 'A' ? (back ? [0, 0x40] : [0, 1, 0x40]).indexOf(body[i]) >= 0 : x === 'T' ? true : body[i] === x));
         if (sid === 0x2F && bytes[1] === OUT_DID[0] && bytes[2] === OUT_DID[1]) {
-            const body = bytes.slice(3);
-            if (LAYOUTS.some((lay) => fits(body, lay.b) || (lay.b[0] === 0x03 && fits(body, [0x00].concat(lay.b.slice(1)))))) return;
-            if (fits(body, [0x00]) || fits(body, [0x00, 'E'])) return;
+            const body = bytes.slice(3), ai = (lay) => lay.b.indexOf('A');
+            if (LAYOUTS.some((lay) => fits(body, lay.b) && (all.indexOf(body[lay.b.indexOf('E')]) < 0 || outs.indexOf(body[lay.b.indexOf('E')]) >= 0 || body[ai(lay)] === 0x40))) return;
+            if (LAYOUTS.some((lay) => fits(body, lay.b, true) && body[ai(lay)] === 0x40)) return;
+            if (LAYOUTS.some((lay) => lay.b[0] === 0x03 && fits(body, [0x00].concat(lay.b.slice(1)), true))) return;
+            if (fits(body, [0x00]) || fits(body, [0x00, 'E'], true)) return;
         }
         if (Object.values(FN).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7)) return;
         throw bad();
@@ -165,8 +170,8 @@ class LampLink {
         this.stats = { sent: 0, ok: 0, refused: 0, missed: 0, ms: 0, last: null };
         this.queue = Promise.resolve(); this.tp = null; this.lastSent = {};
     }
-    /** one request, in turn; resolves with { ok, nrc, ms, reply } */
-    request(target, bytes) {
+    /** one request, in turn (parallel: now, beside whatever is in flight); resolves with { ok, nrc, ms, reply } */
+    request(target, bytes, parallel) {
         check(target, bytes);
         const run = async () => {
             const t0 = Date.now(), sid = bytes[0], data = bytes.slice(1);
@@ -183,6 +188,7 @@ class LampLink {
             this.stats.ok++;
             return { ok: true, nrc: null, ms, reply: u };
         };
+        if (parallel) return run();
         const p = this.queue.then(run, run);
         this.queue = p.catch(() => null);
         return p;
@@ -325,6 +331,14 @@ class LampLink {
         if (l.usual) this.stuck.add(id);
         return r;
     }
+    /**
+     * A flash of these lamps' functions, all at once: each lamp function once (both sides - the turn signals a side
+     * each), sent together, every one for ms and then the car's own again by itself (nothing to switch off).
+     */
+    burst(ids, ms) {
+        const codes = Array.from(new Set(ids.map((id) => FN[id]).filter((c) => c !== undefined)));
+        return Promise.all(codes.map((c) => this.request(BDC, req.fn(c, ms), true)));
+    }
     /** one headlight module's light function for s seconds (0: off): the lamp check's high beam tries */
     async lvTry(ecu, lv, s) { await this.enter(ecu); return this.request(ecu, req.lv(lv, s)); }
     /** a body controller lamp function for ms (both sides, except the turn signals), then the car's own again */
@@ -343,4 +357,4 @@ class LampLink {
     }
 }
 
-module.exports = { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BLINK_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };
+module.exports = { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };

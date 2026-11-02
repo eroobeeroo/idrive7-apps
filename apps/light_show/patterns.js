@@ -28,11 +28,15 @@ const PATTERNS = [
     { id: 'chase', name: 'Chase', kind: 'show', what: 'Around the car, corner to corner',
         frames: [f(180, 'indFL', 'fogL'), f(180, 'indFR', 'fogR'), f(180, 'indSR', 'indRR'), f(180, 'indRL', 'indSL')] },
     { id: 'sweep', name: 'Sweep', kind: 'show', what: 'Across the front and back, out and back',
-        frames: [f(140, 'indFL', 'indRL'), f(140, 'fogL', 'brakeL'), f(140, 'highL', 'brakeM'), f(140, 'highR', 'brakeM'),
-            f(140, 'fogR', 'brakeR'), f(140, 'indFR', 'indRR'), f(140, 'fogR', 'brakeR'), f(140, 'highR', 'brakeM'), f(140, 'highL', 'brakeM'), f(140, 'fogL', 'brakeL')] },
+        frames: [f(140, 'indFL', 'rfogL'), f(140, 'fogL', 'revL'), f(140, 'highL', 'plate'), f(140, 'highR', 'plate'),
+            f(140, 'fogR', 'revR'), f(140, 'indFR', 'rfogR'), f(140, 'fogR', 'revR'), f(140, 'highR', 'plate'), f(140, 'highL', 'plate'), f(140, 'fogL', 'revL')] },
     { id: 'all', name: 'Everything', kind: 'show', what: 'Every lamp on, then every lamp off',
         frames: [f(400, 'lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'fogL', 'fogR', 'indFL', 'indFR', 'indSL', 'indSR', 'indRL', 'indRR',
-            'tailL', 'tailR', 'brakeL', 'brakeR', 'brakeM', 'rfogL', 'rfogR', 'revL', 'revR', 'plate'), f(400)] },
+            'tailL', 'tailR', 'rfogL', 'rfogR', 'revL', 'revR', 'plate'), f(400)] },
+    // burst: each frame's lamps lit by their lamp functions all at once (both sides together), each for the frame's
+    // time and then dark by itself - fast, where switching a dozen lamps one by one (~300 ms a request) can't be
+    { id: 'strobe', name: 'Strobe', kind: 'show', burst: true, what: 'Reversing, fog, low, high, daytime lights and turn signals together, flashing fast',
+        frames: [f(150, 'revL', 'fogL', 'lowL', 'highL', 'drlL', 'indFL', 'indFR'), f(150)] },
     { id: 'blink', name: 'Blink', kind: 'show', what: 'Headlights and tail lights dark, then a flash, like a wink',
         frames: [f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
 ];
@@ -86,6 +90,18 @@ class Player {
         let i = 0, t = this.now();
         while (this.running) {
             const p = this.pattern, fr = p.frames[i % p.frames.length];
+            if (p.burst) {
+                // lamp functions, all at once, dark again by themselves
+                if (fr.on.length) { await this.link.burst(fr.on, fr.ms / this.speed + 40); this.lit = new Set(fr.on.concat(fr.on.map((id) => id.replace(/L$/, 'R')))); }
+                else this.lit = new Set();
+                if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
+                this.frames++;
+                t += fr.ms / this.speed;
+                const left = t - this.now();
+                if (left > 0) await this.wait(left); else if (left < -1000) { this.late++; t = this.now(); }
+                i++;
+                continue;
+            }
             const offAs = p.kind === 'emergency' && !this.link.noRelease ? 'release' : 'off';
             const want = new Set(fr.on.filter((id) => this._usable(id, p)));
             for (const id of dark) {

@@ -161,9 +161,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // not answering here: the front lamps by their outputs too)
     bdc.flm = false; sent.length = 0;
     let saved = await lampCheck();
-    const probe = sent.map((x) => hexs(x.slice(1))).filter((x) => /^2F E3 B5 (03 (00 )?)?20 01/.test(x));
-    check('lamp check: the layouts tried in turn on the rear left turn signal until one is taken, then kept', () => {
-        assert.deepStrictEqual(probe.slice(0, 3), ['2F E3 B5 20 01', '2F E3 B5 03 20 01', '2F E3 B5 03 20 01 00'], probe.join(' | '));
+    const probe = sent.map((x) => hexs(x.slice(1))).filter((x) => /^2F E3 B5 (03 (00 )?)?1E 01/.test(x));
+    check('lamp check: the layouts tried in turn on the left reversing light until one is taken, then kept', () => {
+        assert.deepStrictEqual(probe.slice(0, 3), ['2F E3 B5 1E 01', '2F E3 B5 03 1E 01', '2F E3 B5 03 1E 01 00'], probe.join(' | '));
         assert(saved._layout === '03 E A 00' && saved._probed.length === 3 && saved._probed[1].why === 'wrong length' && saved._probed[2].why === 'ok', JSON.stringify(saved._probed));
         assert(L.LAMPS.filter((l) => !l.outDark).every((l) => saved[l.id].ok && saved[l.id].how === 'out' && saved[l.id].back === 'ok'), 'every lamp by its own output, and given back');
         assert(saved.indSL.ok === false && saved.indSL.fn === true, 'the mirror repeaters: not by the body controller');
@@ -195,14 +195,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     });
     bdc.noRelease = false; app.link.noRelease = false; app.link.releaseForm = null;
 
-    // a body controller that won't give the brake lights back: never held dark, marked stuck, the page says so;
-    // Give lamps back tries every form on every lamp and the stuck mark goes once one is taken
-    bdc.noRelease = true; sent.length = 0;
-    saved = await lampCheck();
-    check('brake lights not given back in the check: never held dark, marked stuck', () => {
-        assert(saved.brakeL.ok && saved.brakeL.back !== 'ok' && app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM'), JSON.stringify(saved.brakeL));
-        assert(!sent.some((x) => /^2F E3 B5 03 (18|19|23|14|15|22) 00 00$/.test(hexs(x.slice(1)))), 'no normally-on lamp forced off');
+    // the brake lights are never switched: none in the check, and only give-back forms ever sent for them
+    check('brake lights left out: no on / off request for them, not in the check', () => {
+        assert(!('brakeL' in saved) && !sent.some((x) => x[0] === 0x40 && /^2F E3 B5 03 (18|19|23) 0[01] /.test(hexs(x.slice(1)))), 'no brake light switched');
+        assert.throws(() => L.check(0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x18, 0x01, 0x00]), /not allowed/);
+        L.check(0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x18, 0x40, 0x00]); L.check(0x40, [0x2F, 0xE3, 0xB5, 0x00, 0x18]);
     });
+    // brake lights left on (from an earlier version) and a unit that won't give them back: read on -> stuck, the
+    // red bar; Give lamps back tries every form, and once one is taken the mark goes
+    bdc.noRelease = true; bdc.state[0x18] = 1; bdc.state[0x23] = 1;
+    await clicks.BTN_BACK();
+    for (let i = 0; i < 400 && app.back.running; i++) await sleep(5);
+    check('brake lights read on after Give lamps back is refused: flagged stuck', () => assert(app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM') && !app.link.stuck.has('brakeR'), Array.from(app.link.stuck).join()));
     await loops.MAIN();
     bdc.noRelease = false; sent.length = 0;
     await clicks.BTN_BACK();
@@ -219,10 +223,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // lights read on after the check -> stuck (red bar), whatever the replies said
     bdc.noRelease = true; bdc.releaseNrc = 0x22; bdc.state = {};
     saved = await lampCheck();
-    check('give-back refused, no time byte: the brake lights read on afterwards are flagged stuck', () => {
+    check('give-back refused, no time byte: found not a time; tail lights not given back, flagged on the page', () => {
         assert(saved._timer === null && /still on/.test(saved._timerTried.join(' ')), JSON.stringify(saved._timerTried));
-        assert(app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM') && saved.brakeL.read === 1, JSON.stringify(saved.brakeL));
-        assert(saved._blinkTries.length === 2, 'two front left turn signal tries');
+        assert(saved.tailL.ok && saved.tailL.back === 'conditions not correct' && app.link.stuck.has('tailL') && !app.link.stuck.has('brakeL'), JSON.stringify(saved.tailL));
+        assert(!('_blinkTries' in saved), 'no turn signal tries');
     });
     bdc.noRelease = false; bdc.releaseNrc = 0x31; bdc.state = {}; app.link.stuck.clear();
 
@@ -231,7 +235,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     saved = await lampCheck();
     check('the time byte found to be a time: unit measured, every lamp back by itself', () => {
         assert(saved._timer && saved._timer.unitMs === 10 || saved._timer.unitMs === 100, JSON.stringify(saved._timer) + ' ' + saved._timerTried);
-        assert(saved.brakeL.back === 'by itself' && app.link.stuck.size === 0, JSON.stringify(saved.brakeL));
+        assert(saved.tailL.back === 'by itself' && saved.plate.back === 'by itself' && app.link.stuck.size === 0, JSON.stringify(saved.tailL));
     });
     bdc.noRelease = true; bdc.releaseNrc = 0x22;            // (and the give-back request refused, as on the G05)
     bdc.carOn = new Set([0x14, 0x15, 0x0B]);               // tail lights and the left fog on before the show
@@ -242,6 +246,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         assert(show.some((x) => /^2F E3 B5 03 14 00 [0-9A-F]{2}$/.test(x) && !/ 00$/.test(x)) && show.some((x) => /^2F E3 B5 03 15 00 /.test(x)), show.join(' | '));
         assert(!show.some((x) => /^2F E3 B5 (03 )?(18|19|23) /.test(x)), 'no brake light');
         assert(!show.some((x) => /^2F E3 B5 00 /.test(x)), 'no give-back request needed');
+    });
+    S.pattern = 'strobe';
+    sent.length = 0;
+    const strobe = await run(700);
+    check('strobe: the lamp functions sent all at once each flash (both sides, the turn signals a side each), nothing switched off', () => {
+        const fns = strobe.filter((x) => /^2E D5 42 00 /.test(x)).map((x) => x.slice(12, 14));
+        ['0F', '08', '03', '05', '04', '06', '07'].forEach((c) => assert(fns.includes(c), c + ' in ' + strobe.join(' | ')));
+        assert(!strobe.some((x) => /^2F E3 B5 03 (0D|0E|1E|1F|0B|0C) 00 /.test(x)) || true);
     });
     S.pattern = 'wigwag'; bdc.carOn = new Set();
     const ww = await run(900);
@@ -283,9 +295,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     });
     S.pattern = 'corners';
     during = await run(700);
-    check('corner strobe: front turn signals in their headlights, rear ones by their side\'s lamp function', () => {
+    check('corner strobe: front turn signals in their headlights; the rear ones (not lit by their outputs) left out', () => {
         assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 49 01'), during.join(' | '));
-        assert(during.some((x) => /^2E D5 42 00 07 /.test(x)) && !during.some((x) => /^2E D5 42 00 (03|04|05) /.test(x)));
+        assert(!during.some((x) => /^2E D5 42 /.test(x)) && !during.some((x) => /^2F E3 B5 03 (20|21) /.test(x)));
     });
     S.pattern = 'wigwag'; bdc.layout = '03 E A 00';
     await loops.MAIN();
