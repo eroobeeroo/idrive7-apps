@@ -68,6 +68,12 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
         const f = JSON.parse(fs.readFileSync(path.join(dir, 'edrive2.json'), 'utf8'));
         assert(f.power.kw === -1.6 && f.values.battery.c === 28.3 && f.values.oil.c === 81 && f.values.soc.pct === 64.4 && fast > 0 && prov.status().wanted);
     });
+    check('Cluster Info reads the provider\'s battery charge (a percentage)', () => {
+        const { startProviders } = require(path.join(ROOT, 'apps', 'cluster_info', 'providers.js'));
+        const r = startProviders({ info() {}, warn() {} }, { dir, setInterval: () => 0 });
+        const v = r.value('soc');
+        assert(v && v.pct === 64.4, JSON.stringify(v));
+    });
     // the car's own oil temperature wins over a provider's
     handlers.statusEngineTemperature && handlers.statusEngineTemperature({ temperatureEngineDrive: 48 + 90, temperatureEngineOilDrive: 48 + 95 });
     await sleep(400);

@@ -8,8 +8,8 @@
  *
  *   { "v": 1, "t": <Date.now() when written>, "app": "eDrive Live",
  *     "power": { "kw": -1.2, "outMax": 100, "inMax": 60, "old": false },     (optional: the battery's power)
- *     "values": { "battery": { "c": 24.5 }, "oil": { "c": 81 } } }           (optional: temperatures in deg C,
- *                                                                              or { "text": "...", "label": "..." })
+ *     "values": { "battery": { "c": 24.5 }, "oil": { "c": 81 },              (optional: temperatures in deg C,
+ *                 "soc": { "pct": 64.4 } } }                                   a percentage, or { "text", "label" })
  *
  * A file older than STALE_MS counts as gone. Cluster Info writes wanted.json in the same folder while its panel
  * is up: { "t": ..., "power": true, "values": ["battery", "oil"] } - what it shows now, so a provider can read
@@ -64,11 +64,11 @@ function startProviders(log, opts) {
         }
         return null;
     }
-    /** A named value from the first provider that has it: { c } or { text, label }, with app; or null. */
+    /** A named value from the first provider that has it: { c }, { pct } or { text, label }, with app; or null. */
     function value(name) {
         for (const id of Object.keys(entries).sort()) {
             const v = entries[id].values && entries[id].values[name];
-            if (v && (typeof v.c === 'number' || typeof v.text === 'string')) return Object.assign({ app: entries[id].app || id }, v);
+            if (v && (typeof v.c === 'number' || typeof v.pct === 'number' || typeof v.text === 'string')) return Object.assign({ app: entries[id].app || id }, v);
         }
         return null;
     }
