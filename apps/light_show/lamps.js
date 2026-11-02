@@ -4,8 +4,9 @@
  * as BMW's SGBD for the G05 body controller (BDC_G05) describes them:
  *
  *   LICHT_AUSGANG_DIGITAL_STEUERN, 0x2F (I/O control) on 0xE3B5, one lamp output at a time:
- *       2F E3 B5 03 <output> 01     on     (03: short term adjustment)
- *       2F E3 B5 03 <output> 00     off
+ *       2F E3 B5 <output> 01        on     (BMW's STEUERN_IO sends no control parameter unless asked for one;
+ *       2F E3 B5 <output> 00        off     the G05's body controller answers "wrong length" to the form with it:
+ *                                           2F E3 B5 03 <output> 01, tried when the first is refused that way)
  *       2F E3 B5 00 <output>        back to the car (00: return control to the ECU; the car's own lights: the
  *                                   driver's brake pedal, the light switch, the turn signals work again)
  *   LEUCHTEN_FUNKTION, 0x2E on 0xD542, a lamp function for a time, then the car's own again (fallback, and the
@@ -65,8 +66,8 @@ const NRC = { 0x10: 'refused', 0x11: 'not supported', 0x12: 'not supported', 0x1
 const hex = (n) => n.toString(16).toUpperCase().padStart(2, '0');
 
 const req = {
-    on: (l) => [0x2F, OUT_DID, 0x03, l.out, 0x01],
-    off: (l) => [0x2F, OUT_DID, 0x03, l.out, 0x00],
+    on: (l, form) => [0x2F, OUT_DID, form === 'sta' ? [0x03] : [], l.out, 0x01],
+    off: (l, form) => [0x2F, OUT_DID, form === 'sta' ? [0x03] : [], l.out, 0x00],
     release: (l) => [0x2F, OUT_DID, 0x00, l.out],
     releaseShort: () => [0x2F, OUT_DID, 0x00],
     fn: (fn, ms) => { const t = Math.max(1, Math.min(32700, Math.round(ms / 10))); return [0x2E, FN_DID, 0x00, fn, t >> 8, t & 0xFF]; },
@@ -84,6 +85,7 @@ function check(target, bytes) {
     if (sid === 0x3E && bytes.length === 2 && a === 0x00) return;
     if (sid === 0x2F && a === 0xE3 && b === 0xB5) {
         if (bytes.length === 6 && c === 0x03 && outs.indexOf(d) >= 0 && (e === 0 || e === 1)) return;
+        if (bytes.length === 5 && outs.indexOf(c) >= 0 && (d === 0 || d === 1)) return;
         if (bytes.length === 5 && c === 0x00 && outs.indexOf(d) >= 0) return;
         if (bytes.length === 4 && c === 0x00) return;
     }
@@ -104,6 +106,7 @@ class LampLink {
         this.diag = diag; this.log = log; this.opts = opts || {};
         this.held = new Set();            // lamps taken over (on or forced off) and not given back
         this.active = false; this.session = null; this.releaseForm = 'long';
+        this.outForm = null;              // the output request's layout the unit takes: 'plain' or 'sta' (null: not known yet)
         this.stats = { sent: 0, ok: 0, refused: 0, missed: 0, ms: 0, last: null };
         this.queue = Promise.resolve(); this.tp = null; this.lastSent = 0;
     }
@@ -112,7 +115,7 @@ class LampLink {
         check(BDC, bytes);
         const run = async () => {
             const t0 = Date.now(), sid = bytes[0], data = bytes.slice(1);
-            const echo = data.slice(0, sid === 0x2F ? 3 : sid === 0x2E ? 2 : 1);
+            const echo = data.slice(0, sid === 0x2F || sid === 0x2E ? 2 : 1);
             const accept = (u) => (u[0] === sid + 0x40 && echo.every((x, i) => u[i + 1] === x)) || (u[0] === 0x7F && u[1] === sid);
             this.stats.sent++; this.lastSent = t0;
             let u = null;
@@ -144,8 +147,14 @@ class LampLink {
         const l = BY_ID[id];
         if (!l) return { ok: false, nrc: null, ms: 0 };
         if (on || offAs === 'off') {
-            const r = await this.request(on ? req.on(l) : req.off(l));
-            if (r.ok) this.held.add(id);
+            const build = on ? req.on : req.off;
+            let r = await this.request(build(l, this.outForm || 'plain'));
+            // the layout not known yet and this one refused as the wrong length: the other one
+            if (!this.outForm && !r.ok && r.nrc === 0x13) {
+                r = await this.request(build(l, 'sta'));
+                if (r.ok || r.nrc !== 0x13) this.outForm = 'sta';
+            } else if (!this.outForm && (r.ok || r.nrc !== 0x13)) this.outForm = 'plain';
+            if (r.ok) { this.held.add(id); if (!this.formLogged) { this.formLogged = true; this.log.info('light show: outputs take the ' + this.outForm + ' layout'); } }
             return r;
         }
         return this.release(id);

@@ -5,7 +5,7 @@ address 0x40), as BMW's SGBD for the G05 body controller (`BDC_G05`) describes t
 
 | What | Request | SGBD job |
 | --- | --- | --- |
-| one lamp output on / off | `2F E3 B5 03 <output> 01` / `00` | LICHT_AUSGANG_DIGITAL_STEUERN |
+| one lamp output on / off | `2F E3 B5 <output> 01` / `00` (`2F E3 B5 03 <output> ..` if a unit wants the control parameter: the G05 answers that form "wrong length") | LICHT_AUSGANG_DIGITAL_STEUERN |
 | that output back to the car | `2F E3 B5 00 <output>` | (return control to the ECU) |
 | a lamp function for a time (lamp check fallback) | `2E D5 42 00 <function> <time, 10 ms>` | LEUCHTEN_FUNKTION |
 | session / keep-alive | `10 03`, `3E 00` every 2 s, `10 01` at stop | |
@@ -17,7 +17,8 @@ be sent: `check()` refuses any other request before it reaches the transport.
 
 - **Light Show**: the pattern (Next pattern, or Settings), Start / stop, the lamps lit now.
 - **Lamp check**: each lamp on for 1.2 s in turn (about 48 s, the order is the list on the page). A lamp the body
-  controller refuses is left out of every pattern; run it again after a software update.
+  controller refuses is left out of every pattern, unless its lamp function works and is its side's alone (the turn
+  signals: left and right are separate functions); run it again after a software update.
 
 ## Patterns
 

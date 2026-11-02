@@ -23,15 +23,20 @@ function check(name, fn) { try { fn(); passed++; console.log('ok   ' + name); } 
 
 /* the body controller: answers like the SGBD says, with knobs for refusals */
 const sent = [];
-const bdc = { refuseOut: new Set(), noRelease: false, session: 0x01 };
+// like the G05's: an output request with the control parameter (03) is the wrong length, without it it's taken
+// (wantSta: a unit the other way round)
+const bdc = { refuseOut: new Set(), noRelease: false, session: 0x01, wantSta: false };
 function answer(target, sid, data) {
     if (target !== 0x40) return null;
     const d = data;
     if (sid === 0x10) { bdc.session = d[0]; return [0x50, d[0], 0x00, 0x32, 0x01, 0xF4]; }
     if (sid === 0x3E) return [0x7E, 0x00];
     if (sid === 0x2F) {
-        if (d[2] === 0x00 && bdc.noRelease) return [0x7F, 0x2F, 0x31];
-        if (d[2] === 0x03 && bdc.refuseOut.has(d[3])) return [0x7F, 0x2F, 0x31];
+        if (d[2] === 0x00) return bdc.noRelease ? [0x7F, 0x2F, 0x31] : bdc.session === 0x03 ? [0x6F].concat(d) : [0x7F, 0x2F, 0x7F];
+        const sta = d.length === 5 && d[2] === 0x03;
+        if (sta !== bdc.wantSta) return [0x7F, 0x2F, 0x13];
+        const out = sta ? d[3] : d[2];
+        if (bdc.refuseOut.has(out)) return [0x7F, 0x2F, 0x31];
         if (bdc.session !== 0x03) return [0x7F, 0x2F, 0x7F];
         return [0x6F].concat(d);
     }
@@ -70,8 +75,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         L.LAMPS.forEach((l) => { L.check(0x40, L.req.on(l)); L.check(0x40, L.req.off(l)); L.check(0x40, L.req.release(l)); });
         L.check(0x40, L.req.fn(0x05, 300));
     });
-    check('requests as the SGBD describes them: 2F E3B5 03 <output> 01, 2F E3B5 00 <output>, 2E D542 <function> <10 ms>', () => {
-        assert.strictEqual(hexs(L.req.on(L.BY_ID.highL)), '2F E3 B5 03 07 01');
+    check('requests as the SGBD describes them: 2F E3B5 <output> 01 (or with 03), 2F E3B5 00 <output>, 2E D542 <function> <10 ms>', () => {
+        assert.strictEqual(hexs(L.req.on(L.BY_ID.highL)), '2F E3 B5 07 01');
+        assert.strictEqual(hexs(L.req.on(L.BY_ID.highL, 'sta')), '2F E3 B5 03 07 01');
         assert.strictEqual(hexs(L.req.release(L.BY_ID.highR)), '2F E3 B5 00 08');
         assert.strictEqual(hexs(L.req.fn(0x05, 300)), '2E D5 42 00 05 00 1E');
     });
@@ -109,10 +115,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const during = sent.map((s) => hexs(s.slice(1)));
     check('start: the extended session first, then the high beams in turn, each given back between flashes', () => {
         assert.strictEqual(during[0], '10 03');
-        assert(during.indexOf('2F E3 B5 03 07 01') > 0 && during.indexOf('2F E3 B5 03 08 01') > 0, during.join(' | '));
-        assert(during.indexOf('2F E3 B5 00 07') > during.indexOf('2F E3 B5 03 07 01'), 'left given back after its flash');
+        assert(during.indexOf('2F E3 B5 07 01') > 0 && during.indexOf('2F E3 B5 08 01') > 0, during.join(' | '));
+        assert(during.indexOf('2F E3 B5 00 07') > during.indexOf('2F E3 B5 07 01'), 'left given back after its flash');
         assert(sent.every((s) => s[0] === 0x40), 'only the body controller');
-        assert(!during.some((s) => /^2F E3 B5 03 (01|02|03|04|14|15|18|19|22|23) /.test(s)), 'no lamp the car keeps on');
+        assert(!during.some((s) => /^2F E3 B5 (03 )?(01|02|03|04|14|15|18|19|22|23) 0[01]$/.test(s)), 'no lamp the car keeps on');
     });
     sent.length = 0;
     await clicks.BTN_RUN();            // stop
@@ -128,11 +134,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await clicks.BTN_RUN(); await sleep(900); await clicks.BTN_RUN(); await sleep(50);
     const held = sent.map((s) => hexs(s.slice(1)));
     check('no single release: high beams held dark between flashes instead, session ended at stop', () => {
-        assert(app.link.noRelease && held.indexOf('2F E3 B5 03 07 00') === held.indexOf('2F E3 B5 00 07') + 1, held.join(' | '));
-        assert(held.indexOf('2F E3 B5 03 07 00') < held.indexOf('2F E3 B5 03 08 01'), 'dark before the other side lights');
+        assert(app.link.noRelease && held.indexOf('2F E3 B5 07 00') === held.indexOf('2F E3 B5 00 07') + 1, held.join(' | '));
+        assert(held.indexOf('2F E3 B5 07 00') < held.indexOf('2F E3 B5 08 01'), 'dark before the other side lights');
         assert.strictEqual(held[held.length - 1], '10 01');
     });
     bdc.noRelease = false; app.link.noRelease = false;
+
+    // a unit that wants the control parameter: found from the "wrong length" refusal, then used
+    bdc.wantSta = true; app.link.outForm = null; sent.length = 0;
+    await clicks.BTN_RUN(); await sleep(900); await clicks.BTN_RUN(); await sleep(50);
+    const sta = sent.map((s) => hexs(s.slice(1)));
+    check('the other layout when the first is the wrong length, kept after that', () => {
+        assert(app.link.outForm === 'sta' && sta.indexOf('2F E3 B5 03 08 01') > 0, sta.join(' | '));
+        assert.strictEqual(sta.filter((x) => x === '2F E3 B5 07 01').length, 1, 'the plain layout tried once');
+    });
+    bdc.wantSta = false; app.link.outForm = null;
 
     // only while parked
     S.parkedOnly = true;
@@ -149,17 +165,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // the lamp check (its waits made short), with the low beam output refused: its lamp function answers instead
     const realST = global.setTimeout;
     global.setTimeout = (fn, ms, ...a) => realST(fn, ms >= 500 ? 1 : ms, ...a);
-    bdc.refuseOut.add(0x01);
+    bdc.refuseOut.add(0x01); bdc.refuseOut.add(0x0D);
     await clicks.BTN_PAGE();
     await clicks.BTN_RUN();
     for (let i = 0; i < 200 && app.check.running; i++) await new Promise((r) => realST(r, 5));
     global.setTimeout = realST;
-    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'lamps.json'), 'utf8'));
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
     check('lamp check: every lamp tried; a refused output tried as its function, and left out of patterns', () => {
         assert(!app.check.running && Object.keys(saved).length === L.LAMPS.length, Object.keys(saved).length + ' lamps');
         assert(saved.lowL.ok === false && /function only/.test(saved.lowL.why) && saved.highL.ok === true, JSON.stringify(saved.lowL));
         assert(sent.some((s) => hexs(s.slice(1)) === '2E D5 42 00 03 00 78'), 'low beam function for 1.2 s');
     });
+    // the front left turn signal's output refused, its (left-only) function works: the corner strobe uses it
+    check('a side\'s own lamp function stands in for a refused output (turn signals only)', () => assert(saved.indFL.ok === false && saved.indFL.fn === true && saved.lowL.fn === true));
+    S.pattern = 'corners'; sent.length = 0;
+    await clicks.BTN_PAGE();
+    await clicks.BTN_RUN(); await sleep(700); await clicks.BTN_RUN(); await sleep(50);
+    const corners = sent.map((s) => hexs(s.slice(1)));
+    check('corner strobe: the left turn signal by its function, the right by its output; the low beams never', () => {
+        assert(corners.some((x) => /^2E D5 42 00 06 /.test(x)) && corners.indexOf('2F E3 B5 21 01') > 0, corners.join(' | '));
+        assert(!corners.some((x) => /^2E D5 42 00 03 /.test(x)) && !corners.includes('2F E3 B5 0D 01'));
+    });
+    S.pattern = 'wigwag';
     await loops.MAIN();
     check('the check page draws with results', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 

@@ -46,7 +46,9 @@ function safeForDriving(p) { return lampsOf(p).every((id) => BY_ID[id] && !BY_ID
 
 /**
  * Runs one pattern on the link until stopped.
- *   const pl = new Player(link, { usable(id) -> bool, onFrame(lit Set), log });
+ *   const pl = new Player(link, { usable(id) -> bool, viaFn(id) -> bool, onFrame(lit Set), log });
+ *   viaFn(id): the lamp's own output is refused but its lamp function works and is its side's alone (the turn
+ *   signals): lit with the function for the frame's time, which goes dark by itself
  *   pl.start(PATTERN.wigwag, 1);  pl.stop() -> Promise (every lamp back);  pl.running
  */
 class Player {
@@ -81,11 +83,11 @@ class Player {
             const offAs = p.kind === 'emergency' && !this.link.noRelease ? 'release' : 'off';
             const want = new Set(fr.on.filter((id) => this._usable(id, p)));
             // lamps going dark first (a frame never has two sides lit at once), then the ones coming on
-            for (const id of Array.from(this.lit)) if (!want.has(id)) { await this.link.set(id, false, offAs); this.lit.delete(id); }
+            for (const id of Array.from(this.lit)) if (!want.has(id)) { if (!this._fn(id)) await this.link.set(id, false, offAs); this.lit.delete(id); }
             for (const id of want) {
                 if (!this.running) break;
                 if (this.lit.has(id)) continue;
-                const r = await this.link.set(id, true);
+                const r = this._fn(id) ? await this.link.fn(id, fr.ms / this.speed + 60) : await this.link.set(id, true);
                 if (r.ok) this.lit.add(id);
                 else if (r.nrc !== null && this.opts.refused) this.opts.refused(id, r.nrc);
             }
@@ -98,6 +100,7 @@ class Player {
             i++;
         }
     }
+    _fn(id) { return !!(this.opts.viaFn && this.opts.viaFn(id)); }
     _usable(id, p) {
         const l = BY_ID[id];
         if (!l) return false;

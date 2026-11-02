@@ -17,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BY_ID, NRC, hex } = require('./lamps');
+const { LampLink, LAMPS, BY_ID, FN, NRC, hex } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
 
 const W = 1600, H = 520;
@@ -43,11 +43,14 @@ mgu.run({
         const link = new LampLink(diag, log);
 
         /* ---------- the lamp check's results, kept: { id: { ok, why, t } } ---------- */
-        const FILE = path.join(ctx.dataDir || '.', 'lamps.json');
+        // (lamp-check.json: 0.1.0's lamps.json was made with a request layout the G05 refuses, so it isn't read)
+        const FILE = path.join(ctx.dataDir || '.', 'lamp-check.json');
         let checked = {};
         try { checked = JSON.parse(fs.readFileSync(FILE, 'utf8')) || {}; } catch (e) { /* none yet */ }
         const save = () => { try { fs.writeFileSync(FILE, JSON.stringify(checked)); } catch (e) { log.warn('light show: ' + e.message); } };
-        const usable = (id) => !checked[id] || checked[id].ok !== false;
+        // a lamp works through its own output, or through its lamp function when that is its side's alone
+        const sideFn = (id) => !!(checked[id] && checked[id].fn && FN[id] && Object.keys(FN).filter((k) => FN[k] === FN[id]).every((k) => BY_ID[k].side === BY_ID[id].side));
+        const usable = (id) => !checked[id] || checked[id].ok !== false || sideFn(id);
 
         /* ---------- parked or moving (Vehicle2 speed) ---------- */
         let speed = null;
@@ -59,7 +62,7 @@ mgu.run({
         /* ---------- the player ---------- */
         let lit = new Set(), frameAt = -1, startedAt = 0, stopWhy = '';
         const player = new Player(link, {
-            log, usable,
+            log, usable, viaFn: (id) => !!(checked[id] && checked[id].ok === false && sideFn(id)),
             onFrame: (l, i) => { lit = new Set(l); frameAt = i; },
             refused: (id, nrc) => {
                 // refused during a pattern: left out until the next lamp check
@@ -114,7 +117,7 @@ mgu.run({
                 if (how === 'own output') await link.set(l.id, false, 'release');
                 lit = new Set();
                 checked[l.id] = r.ok && how === 'own output' ? { ok: true, t: Date.now(), ms: r.ms }
-                    : { ok: false, why: r.ok ? how : r.nrc !== null ? NRC[r.nrc] || 'NRC ' + hex(r.nrc) : 'no answer', t: Date.now() };
+                    : { ok: false, fn: r.ok, why: r.ok ? how : r.nrc !== null ? NRC[r.nrc] || 'NRC ' + hex(r.nrc) : 'no answer', t: Date.now() };
                 log.info('lamp check: ' + l.name + ' (' + hex(l.out) + '): ' + (checked[l.id].ok ? 'works, ' + r.ms + ' ms' : checked[l.id].why));
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
             }
@@ -197,8 +200,10 @@ mgu.run({
                 LAMPS.forEach((l, i) => {
                     const col = Math.floor(i / 8), row = i % 8, x = 56 + col * 336, y = 222 + row * 34;
                     const c = checked[l.id], now = check.running && check.at === i;
-                    const mark = now ? '>' : !c ? '·' : c.ok ? '✓' : '✗';
-                    cv.text(mark, x, y, 20, now ? t.text : !c ? t.dim : c.ok ? GO : t.warn, { font: 'bold', literal: true });
+                    // a drawn mark (the car's font has no tick or cross): green works, amber refused, white now, grey not checked
+                    const mc = now ? t.text : !c ? withAlpha(t.dim, 0.5) : c.ok ? GO : t.warn;
+                    if (now || !c) cv.circle(x + 8, y - 6, now ? 8 : 5, mc);
+                    else cv.roundRect(x, y - 14, 18, 16, 4, mc);
                     cv.text((i + 1) + '. ' + l.name, x + 26, y, 17, now ? t.text : t.dim, { literal: true });
                     if (c && !c.ok) cv.text(c.why, x + 26, y + 15, 12, t.warn, { literal: true });
                 });
