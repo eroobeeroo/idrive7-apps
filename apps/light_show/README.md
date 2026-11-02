@@ -1,24 +1,32 @@
 # Light Show
 
-Flashes the exterior lamps in patterns through the body controller's own lamp test functions (BDC, diagnostic
-address 0x40), as BMW's SGBD for the G05 body controller (`BDC_G05`) describes them:
+Flashes the exterior lamps in patterns through BMW's own test functions, as the SGBDs for the G05's body controller
+(`BDC_G05`, diagnostic address 0x40) and LED headlight modules (`FLM02_L` / `FLM02_R`, 0x43 / 0x44) describe them:
 
 | What | Request | SGBD job |
 | --- | --- | --- |
-| one lamp output on / off | `2F E3 B5 <output> 01` / `00` (`2F E3 B5 03 <output> ..` if a unit wants the control parameter: the G05 answers that form "wrong length") | LICHT_AUSGANG_DIGITAL_STEUERN |
+| one lamp output on / off (body controller, every lamp, each side its own) | `2F E3 B5` + a layout the lamp check finds | LICHT_AUSGANG_DIGITAL_STEUERN |
 | that output back to the car | `2F E3 B5 00 <output>` | (return control to the ECU) |
-| a lamp function for a time (lamp check fallback) | `2E D5 42 00 <function> <time, 10 ms>` | LEUCHTEN_FUNKTION |
+| a light function in one headlight (front lamps, one module a side) | `2E D6 DC 00 <function> <seconds>` (0 s: off) | FLM_FUNKTION_LICHTVERTEILUNG |
+| a lamp function for a time (both sides, except the turn signals) | `2E D5 42 00 <function> <time, 10 ms>` | LEUCHTEN_FUNKTION |
 | session / keep-alive | `10 03`, `3E 00` every 2 s, `10 01` at stop | |
 
-Outputs and functions: `lamps.js` (TAB_LEUCHTEN_AUSGANG_DIGITAL_ARG / TAB_LEUCHTEN_FUNKTION_ARG). Nothing else can
-be sent: `check()` refuses any other request before it reaches the transport.
+The SGBD names the output request's arguments (output, on / off) but not its layout, and the G05 refused the two
+obvious ones (`2F E3 B5 <output> 01`: out of range, `2F E3 B5 03 <output> 01`: wrong length). The lamp check tries
+the layouts in `lamps.js` (LAYOUTS) on the rear left turn signal and keeps the first one taken; the page shows what the
+body controller said to each. Without one, the front lamps go through their headlight module (one a side) and the
+turn signals through their side's own lamp function.
+
+Nothing else can be sent: `check()` refuses any other request, or a request to another unit, before it reaches the
+transport.
 
 ## Pages
 
 - **Light Show**: the pattern (Next pattern, or Settings), Start / stop, the lamps lit now.
-- **Lamp check**: each lamp on for 1.2 s in turn (about 48 s, the order is the list on the page). A lamp the body
-  controller refuses is left out of every pattern, unless its lamp function works and is its side's alone (the turn
-  signals: left and right are separate functions); run it again after a software update.
+- **Lamp check**: first the output layout (the rear left turn signal blinks a few times), then each lamp on for
+  1.2 s in turn (about 50 s, the order is the list on the page): by its own output, else its headlight module, else
+  its lamp function. A lamp that only works through a both-sides function is left out of every pattern (the turn
+  signals are the exception: left and right are separate functions).
 
 ## Patterns
 

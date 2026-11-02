@@ -76,6 +76,7 @@ class Player {
     setPattern(p) { this.pattern = p; }
     async _run() {
         const ok = await this.link.start();
+        if (!this.link.layout && !this.link.probed && this.opts.needsLayout && this.opts.needsLayout()) await this.link.probe();
         if (!ok && this.opts.log) this.opts.log.warn('light show: no extended session: trying the lamps anyway');
         let i = 0, t = this.now();
         while (this.running) {
@@ -87,7 +88,7 @@ class Player {
             for (const id of want) {
                 if (!this.running) break;
                 if (this.lit.has(id)) continue;
-                const r = this._fn(id) ? await this.link.fn(id, fr.ms / this.speed + 60) : await this.link.set(id, true);
+                const r = this._fn(id) ? await this.link.fn(id, fr.ms / this.speed + 60) : await this.link.set(id, true, null, fr.ms / this.speed);
                 if (r.ok) this.lit.add(id);
                 else if (r.nrc !== null && this.opts.refused) this.opts.refused(id, r.nrc);
             }

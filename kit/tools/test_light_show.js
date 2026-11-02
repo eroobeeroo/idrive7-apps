@@ -21,21 +21,32 @@ const { Recorder: Canvas } = require(path.join(KIT, 'record'));
 let passed = 0;
 function check(name, fn) { try { fn(); passed++; console.log('ok   ' + name); } catch (e) { console.log('FAIL ' + name + ': ' + e.message); process.exitCode = 1; } }
 
-/* the body controller: answers like the SGBD says, with knobs for refusals */
+/* the body controller and headlight modules: answer like the SGBDs say, with knobs. The body controller takes ONE
+   output layout (bdc.layout, the id from lamps.js LAYOUTS; null: none): a request of another length is "wrong length",
+   of the same length "out of range" - as the G05 answered the first two */
 const sent = [];
-// like the G05's: an output request with the control parameter (03) is the wrong length, without it it's taken
-// (wantSta: a unit the other way round)
-const bdc = { refuseOut: new Set(), noRelease: false, session: 0x01, wantSta: false };
+const bdc = { refuseOut: new Set(), noRelease: false, session: 0x01, layout: '03 E A 00', flm: true };
+let L;
 function answer(target, sid, data) {
-    if (target !== 0x40) return null;
     const d = data;
+    if (target === 0x43 || target === 0x44) {
+        if (!bdc.flm) return null;
+        if (sid === 0x10) return [0x50, d[0]];
+        if (sid === 0x3E) return [0x7E, 0x00];
+        if (sid === 0x2E && d[0] === 0xD6 && d[1] === 0xDC) return [0x6E, 0xD6, 0xDC];
+        return [0x7F, sid, 0x11];
+    }
+    if (target !== 0x40) return null;
     if (sid === 0x10) { bdc.session = d[0]; return [0x50, d[0], 0x00, 0x32, 0x01, 0xF4]; }
     if (sid === 0x3E) return [0x7E, 0x00];
     if (sid === 0x2F) {
-        if (d[2] === 0x00) return bdc.noRelease ? [0x7F, 0x2F, 0x31] : bdc.session === 0x03 ? [0x6F].concat(d) : [0x7F, 0x2F, 0x7F];
-        const sta = d.length === 5 && d[2] === 0x03;
-        if (sta !== bdc.wantSta) return [0x7F, 0x2F, 0x13];
-        const out = sta ? d[3] : d[2];
+        if (d[2] === 0x00 && (d.length === 4 || d.length === 3)) return bdc.noRelease ? [0x7F, 0x2F, 0x31] : bdc.session === 0x03 ? [0x6F].concat(d) : [0x7F, 0x2F, 0x7F];
+        const lay = bdc.layout && L.LAYOUT[bdc.layout];
+        if (!lay) return [0x7F, 0x2F, d.length === 4 ? 0x31 : 0x13];
+        if (d.length - 2 !== lay.b.length) return [0x7F, 0x2F, 0x13];
+        const body = d.slice(2), out = body[lay.b.indexOf('E')], act = body[lay.b.indexOf('A')];
+        const fits = lay.b.every((x, i) => (x === 'E' || x === 'A' ? true : body[i] === x)) && L.LAMPS.some((l) => l.out === out) && (act === 0 || act === 1 || lay.b.indexOf('A') < 0);
+        if (!fits) return [0x7F, 0x2F, 0x31];
         if (bdc.refuseOut.has(out)) return [0x7F, 0x2F, 0x31];
         if (bdc.session !== 0x03) return [0x7F, 0x2F, 0x7F];
         return [0x6F].concat(d);
@@ -64,22 +75,29 @@ const hexs = (b) => b.map((x) => x.toString(16).toUpperCase().padStart(2, '0')).
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
-    const L = require(path.join(APP, 'lamps.js'));
+    L = require(path.join(APP, 'lamps.js'));
     const P = require(path.join(APP, 'patterns.js'));
 
     check('only its own requests: other services, identifiers and units are refused before sending', () => {
-        const no = [[0x40, [0x2E, 0xF1, 0x90, 1]], [0x40, [0x31, 0x01, 0xA5, 0x33]], [0x40, [0x2F, 0x60, 0xFD, 0x03, 0x10]], [0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x26, 0x01]],
-            [0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x01, 0x05]], [0x40, [0x14, 0xFF, 0xFF, 0xFF]], [0x40, [0x10, 0x02]], [0x40, [0x11, 0x01]], [0x12, [0x2F, 0xE3, 0xB5, 0x03, 0x07, 0x01]],
-            [0x40, [0x2E, 0xD5, 0x42, 0x00, 0x1D, 0, 10]]];
-        no.forEach(([t, b]) => assert.throws(() => L.check(t, b), /not allowed|only the body/, hexs(b)));
-        L.LAMPS.forEach((l) => { L.check(0x40, L.req.on(l)); L.check(0x40, L.req.off(l)); L.check(0x40, L.req.release(l)); });
+        const no = [[0x40, [0x2E, 0xF1, 0x90, 1]], [0x40, [0x31, 0x01, 0xA5, 0x33]], [0x40, [0x2F, 0x60, 0xFD, 0x03, 0x10]], [0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x26, 0x01, 0x00]],
+            [0x40, [0x2F, 0xE3, 0xB5, 0x03, 0x01, 0x05, 0x00]], [0x40, [0x14, 0xFF, 0xFF, 0xFF]], [0x40, [0x10, 0x02]], [0x40, [0x11, 0x01]], [0x12, [0x2F, 0xE3, 0xB5, 0x03, 0x07, 0x01]],
+            [0x40, [0x2E, 0xD5, 0x42, 0x00, 0x1D, 0, 10]], [0x43, [0x2E, 0xD7, 0xAC, 0x01]], [0x43, [0x31, 0x01, 0xA5, 0x4B, 0, 100, 1]], [0x44, [0x2E, 0xDA, 0x72, 0]],
+            [0x43, [0x2E, 0xD6, 0xDC, 0x00, 0x01, 1]], [0x43, [0x2E, 0xD6, 0xDC, 0x00, 0x45, 255]], [0x43, [0x2F, 0xE3, 0xB5, 0x07, 0x01]], [0x40, [0x2E, 0xD6, 0xDC, 0x00, 0x45, 1]]];
+        no.forEach(([t, b]) => assert.throws(() => L.check(t, b), /not allowed|only the body/, t.toString(16) + ': ' + hexs(b)));
+        L.LAMPS.forEach((l) => {
+            L.LAYOUTS.forEach((lay) => { L.check(0x40, L.req.out(l, lay, true)); L.check(0x40, L.req.out(l, lay, false)); });
+            L.check(0x40, L.req.release(l));
+            if (l.flm) { L.check(l.flm.ecu, L.req.lv(l.flm.lv, 1)); L.check(l.flm.ecu, L.req.lv(l.flm.lv, 0)); }
+        });
         L.check(0x40, L.req.fn(0x05, 300));
     });
-    check('requests as the SGBD describes them: 2F E3B5 <output> 01 (or with 03), 2F E3B5 00 <output>, 2E D542 <function> <10 ms>', () => {
-        assert.strictEqual(hexs(L.req.on(L.BY_ID.highL)), '2F E3 B5 07 01');
-        assert.strictEqual(hexs(L.req.on(L.BY_ID.highL, 'sta')), '2F E3 B5 03 07 01');
+    check('requests as the SGBDs describe them', () => {
+        assert.strictEqual(hexs(L.req.out(L.BY_ID.highL, L.LAYOUT['E A'], true)), '2F E3 B5 07 01');
+        assert.strictEqual(hexs(L.req.out(L.BY_ID.highL, L.LAYOUT['03 E A 00'], false)), '2F E3 B5 03 07 00 00');
         assert.strictEqual(hexs(L.req.release(L.BY_ID.highR)), '2F E3 B5 00 08');
         assert.strictEqual(hexs(L.req.fn(0x05, 300)), '2E D5 42 00 05 00 1E');
+        assert.strictEqual(hexs(L.req.lv(0x45, 1)), '2E D6 DC 00 45 01');
+        assert(L.BY_ID.highL.flm.ecu === 0x43 && L.BY_ID.highR.flm.ecu === 0x44, 'a headlight module each side');
     });
     check('emergency patterns never take over low beams, daytime, tail, plate or brake lights', () => {
         P.PATTERNS.filter((p) => p.kind === 'emergency').forEach((p) => assert(P.safeForDriving(p), p.id));
@@ -107,48 +125,54 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await loops.MAIN(); await clicks.BTN_PAGE(); await loops.MAIN(); await clicks.BTN_PAGE();
     check('both pages draw without errors', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 
-    // wig-wag for a moment
+    const realST = global.setTimeout;
+    const fast = () => { global.setTimeout = (fn, ms, ...a) => realST(fn, ms >= 300 ? 1 : ms, ...a); };
+    const slow = () => { global.setTimeout = realST; };
+    async function lampCheck() {
+        fast();
+        if (app.pages() !== 1) await clicks.BTN_PAGE();
+        await clicks.BTN_RUN();
+        await new Promise((r) => realST(r, 5));
+        for (let i = 0; i < 400 && app.check.running; i++) await new Promise((r) => realST(r, 5));
+        slow();
+        await clicks.BTN_PAGE();
+        return JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
+    }
+    const run = async (ms) => { sent.length = 0; await clicks.BTN_RUN(); await sleep(ms); await clicks.BTN_RUN(); await sleep(50); return sent.map((x) => hexs(x.slice(1))); };
+
+    // the lamp check finds the layout the body controller takes, then tries every lamp with it
     sent.length = 0;
-    await clicks.BTN_RUN();
-    await sleep(900);
-    await loops.MAIN();
-    const during = sent.map((s) => hexs(s.slice(1)));
-    check('start: the extended session first, then the high beams in turn, each given back between flashes', () => {
-        assert.strictEqual(during[0], '10 03');
-        assert(during.indexOf('2F E3 B5 07 01') > 0 && during.indexOf('2F E3 B5 08 01') > 0, during.join(' | '));
-        assert(during.indexOf('2F E3 B5 00 07') > during.indexOf('2F E3 B5 07 01'), 'left given back after its flash');
-        assert(sent.every((s) => s[0] === 0x40), 'only the body controller');
-        assert(!during.some((s) => /^2F E3 B5 (03 )?(01|02|03|04|14|15|18|19|22|23) 0[01]$/.test(s)), 'no lamp the car keeps on');
+    let saved = await lampCheck();
+    const probe = sent.map((x) => hexs(x.slice(1))).filter((x) => /^2F E3 B5 (03 (00 )?)?20 01/.test(x));
+    check('lamp check: the layouts tried in turn on the rear left turn signal until one is taken, then kept', () => {
+        assert.deepStrictEqual(probe.slice(0, 3), ['2F E3 B5 20 01', '2F E3 B5 03 20 01', '2F E3 B5 03 20 01 00'], probe.join(' | '));
+        assert(saved._layout === '03 E A 00' && saved._probed.length === 3 && saved._probed[1].why === 'wrong length' && saved._probed[2].why === 'ok', JSON.stringify(saved._probed));
+        assert(L.LAMPS.every((l) => saved[l.id].ok && saved[l.id].how === 'out'), 'every lamp by its own output');
     });
-    sent.length = 0;
-    await clicks.BTN_RUN();            // stop
-    await sleep(50);
-    const after = sent.map((s) => hexs(s.slice(1)));
-    check('stop: every lamp given back, then the default session', () => {
-        assert.strictEqual(after[after.length - 1], '10 01', after.join(' | '));
+    await loops.MAIN();
+    check('the check page draws with results', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
+
+    // wig-wag
+    let during = await run(900);
+    check('wig-wag: the session first, the high beams in turn each side its own, given back between flashes; then every lamp back and the default session', () => {
+        assert.strictEqual(during[0], '10 03');
+        assert(during.indexOf('2F E3 B5 03 07 01 00') > 0 && during.indexOf('2F E3 B5 03 08 01 00') > 0, during.join(' | '));
+        assert(during.indexOf('2F E3 B5 00 07') > during.indexOf('2F E3 B5 03 07 01 00'), 'left given back after its flash');
+        assert(sent.every((x) => x[0] === 0x40), 'only the body controller');
+        assert(!during.some((x) => /^2F E3 B5 03 (01|02|03|04|14|15|18|19|22|23) /.test(x)), 'no lamp the car keeps on');
+        assert.strictEqual(during[during.length - 1], '10 01');
         assert(!app.player.running && app.link.held.size === 0 && !app.link.active);
     });
 
     // a unit that gives no single lamp back: lamps held dark between flashes, the session's end gives them back
-    bdc.noRelease = true; sent.length = 0;
-    await clicks.BTN_RUN(); await sleep(900); await clicks.BTN_RUN(); await sleep(50);
-    const held = sent.map((s) => hexs(s.slice(1)));
+    bdc.noRelease = true;
+    const held = await run(900);
     check('no single release: high beams held dark between flashes instead, session ended at stop', () => {
-        assert(app.link.noRelease && held.indexOf('2F E3 B5 07 00') === held.indexOf('2F E3 B5 00 07') + 1, held.join(' | '));
-        assert(held.indexOf('2F E3 B5 07 00') < held.indexOf('2F E3 B5 08 01'), 'dark before the other side lights');
+        assert(app.link.noRelease && held.indexOf('2F E3 B5 03 07 00 00') === held.indexOf('2F E3 B5 00 07') + 1, held.join(' | '));
+        assert(held.indexOf('2F E3 B5 03 07 00 00') < held.indexOf('2F E3 B5 03 08 01 00'), 'dark before the other side lights');
         assert.strictEqual(held[held.length - 1], '10 01');
     });
     bdc.noRelease = false; app.link.noRelease = false;
-
-    // a unit that wants the control parameter: found from the "wrong length" refusal, then used
-    bdc.wantSta = true; app.link.outForm = null; sent.length = 0;
-    await clicks.BTN_RUN(); await sleep(900); await clicks.BTN_RUN(); await sleep(50);
-    const sta = sent.map((s) => hexs(s.slice(1)));
-    check('the other layout when the first is the wrong length, kept after that', () => {
-        assert(app.link.outForm === 'sta' && sta.indexOf('2F E3 B5 03 08 01') > 0, sta.join(' | '));
-        assert.strictEqual(sta.filter((x) => x === '2F E3 B5 07 01').length, 1, 'the plain layout tried once');
-    });
-    bdc.wantSta = false; app.link.outForm = null;
 
     // only while parked
     S.parkedOnly = true;
@@ -162,33 +186,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('only while parked: stops as the car moves', () => assert(!app.player.running && !app.link.active));
     S.parkedOnly = false; speedCb({ speedVehicleCentreOfGravity: 0 });
 
-    // the lamp check (its waits made short), with the low beam output refused: its lamp function answers instead
-    const realST = global.setTimeout;
-    global.setTimeout = (fn, ms, ...a) => realST(fn, ms >= 500 ? 1 : ms, ...a);
-    bdc.refuseOut.add(0x01); bdc.refuseOut.add(0x0D);
-    await clicks.BTN_PAGE();
-    await clicks.BTN_RUN();
-    for (let i = 0; i < 200 && app.check.running; i++) await new Promise((r) => realST(r, 5));
-    global.setTimeout = realST;
-    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
-    check('lamp check: every lamp tried; a refused output tried as its function, and left out of patterns', () => {
-        assert(!app.check.running && Object.keys(saved).length === L.LAMPS.length, Object.keys(saved).length + ' lamps');
-        assert(saved.lowL.ok === false && /function only/.test(saved.lowL.why) && saved.highL.ok === true, JSON.stringify(saved.lowL));
-        assert(sent.some((s) => hexs(s.slice(1)) === '2E D5 42 00 03 00 78'), 'low beam function for 1.2 s');
+    // a body controller that takes no layout: the front lamps by their headlight module (one a side), the turn
+    // signals by their side's own lamp function, the rest left out
+    bdc.layout = null; sent.length = 0;
+    saved = await lampCheck();
+    check('no output layout: every layout tried and none kept; front lamps by their headlight module', () => {
+        assert(saved._layout === null && saved._probed.length === L.LAYOUTS.length, JSON.stringify(saved._probed));
+        ['lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'indFL', 'indFR'].forEach((id) => assert(saved[id].ok && saved[id].how === 'flm', id + ' ' + JSON.stringify(saved[id])));
+        assert(saved.indRL.ok === false && saved.indRL.fn === true && saved.tailL.ok === false, JSON.stringify(saved.indRL));
+        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 45 02') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 45 00'), 'high beam on and off in each module');
     });
-    // the front left turn signal's output refused, its (left-only) function works: the corner strobe uses it
-    check('a side\'s own lamp function stands in for a refused output (turn signals only)', () => assert(saved.indFL.ok === false && saved.indFL.fn === true && saved.lowL.fn === true));
-    S.pattern = 'corners'; sent.length = 0;
-    await clicks.BTN_PAGE();
-    await clicks.BTN_RUN(); await sleep(700); await clicks.BTN_RUN(); await sleep(50);
-    const corners = sent.map((s) => hexs(s.slice(1)));
-    check('corner strobe: the left turn signal by its function, the right by its output; the low beams never', () => {
-        assert(corners.some((x) => /^2E D5 42 00 06 /.test(x)) && corners.indexOf('2F E3 B5 21 01') > 0, corners.join(' | '));
-        assert(!corners.some((x) => /^2E D5 42 00 03 /.test(x)) && !corners.includes('2F E3 B5 0D 01'));
+    sent.length = 0;
+    during = await run(900);
+    check('wig-wag by the headlight modules: left module, then right, each one switched off for the other\'s turn', () => {
+        const l = sent.filter((x) => x[0] === 0x43).map((x) => hexs(x.slice(1))), r = sent.filter((x) => x[0] === 0x44).map((x) => hexs(x.slice(1)));
+        assert(l[0] === '10 03' && l.indexOf('2E D6 DC 00 45 01') > 0 && l.indexOf('2E D6 DC 00 45 00') > l.indexOf('2E D6 DC 00 45 01'), l.join(' | '));
+        assert(r.indexOf('2E D6 DC 00 45 01') > 0 && r[r.length - 1] === '10 01' && l[l.length - 1] === '10 01', r.join(' | '));
+        assert(!sent.some((x) => x[0] === 0x40 && x[1] === 0x2F && x.length > 5), 'no body controller output request');
     });
-    S.pattern = 'wigwag';
+    S.pattern = 'corners';
+    during = await run(700);
+    check('corner strobe: front turn signals in their headlights, rear ones by their side\'s lamp function', () => {
+        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 49 01'), during.join(' | '));
+        assert(during.some((x) => /^2E D5 42 00 07 /.test(x)) && !during.some((x) => /^2E D5 42 00 (03|04|05) /.test(x)));
+    });
+    S.pattern = 'wigwag'; bdc.layout = '03 E A 00';
     await loops.MAIN();
-    check('the check page draws with results', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
+    check('pages still draw', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 
     console.log(passed + ' checks passed');
     process.exit(process.exitCode || 0);

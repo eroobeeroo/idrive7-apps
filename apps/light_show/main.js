@@ -17,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BY_ID, FN, NRC, hex } = require('./lamps');
+const { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUT, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
 
 const W = 1600, H = 520;
@@ -51,6 +51,12 @@ mgu.run({
         // a lamp works through its own output, or through its lamp function when that is its side's alone
         const sideFn = (id) => !!(checked[id] && checked[id].fn && FN[id] && Object.keys(FN).filter((k) => FN[k] === FN[id]).every((k) => BY_ID[k].side === BY_ID[id].side));
         const usable = (id) => !checked[id] || checked[id].ok !== false || sideFn(id);
+        // what the last check found: the output layout, each lamp's way (its output, or its headlight module)
+        const restore = () => {
+            if (checked._layout && LAYOUT[checked._layout]) link.layout = LAYOUT[checked._layout];
+            LAMPS.forEach((l) => { link.how[l.id] = checked[l.id] && checked[l.id].how === 'flm' ? 'flm' : 'out'; });
+        };
+        restore();
 
         /* ---------- parked or moving (Vehicle2 speed) ---------- */
         let speed = null;
@@ -62,7 +68,7 @@ mgu.run({
         /* ---------- the player ---------- */
         let lit = new Set(), frameAt = -1, startedAt = 0, stopWhy = '';
         const player = new Player(link, {
-            log, usable, viaFn: (id) => !!(checked[id] && checked[id].ok === false && sideFn(id)),
+            log, usable, needsLayout: () => LAMPS.some((l) => link.how[l.id] !== 'flm' && usable(l.id) && !(checked[l.id] && checked[l.id].ok === false)), viaFn: (id) => !!(checked[id] && checked[id].ok === false && sideFn(id)),
             onFrame: (l, i) => { lit = new Set(l); frameAt = i; },
             refused: (id, nrc) => {
                 // refused during a pattern: left out until the next lamp check
@@ -103,22 +109,31 @@ mgu.run({
             if (check.running || player.running) return;
             check.running = true; check.results = {};
             await link.start();
+            // the body controller's output request: the layout it takes (a moment on the rear left turn signal)
+            link.layout = null; link.probed = null;
+            check.at = -1; lit = new Set(['indRL']);
+            await link.probe();
+            lit = new Set();
+            checked._layout = link.layout ? link.layout.id : null;
+            checked._probed = link.probed;
             for (let i = 0; i < LAMPS.length && check.running; i++) {
                 const l = LAMPS[i];
                 check.at = i; lit = new Set([l.id]);
-                let r = await link.set(l.id, true), how = 'own output';
-                if (!r.ok && r.nrc !== null) {
-                    // the output refused: its lamp function (both sides at once, for a time) instead
-                    const fr = await link.fn(l.id, CHECK_ON_MS);
-                    if (fr.ok) { r = fr; how = 'function only (both sides)'; }
-                }
-                check.results[l.id] = r;
+                // 1. its own output (body controller), 2. its headlight module (front lamps), 3. its lamp function
+                let r = { ok: false, nrc: null }, how = null;
+                const tried = [];
+                if (link.layout) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
+                if (!how && l.flm) { link.how[l.id] = 'flm'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('headlight: ' + why(r)); if (r.ok) how = 'flm'; }
+                let fnOk = false;
+                if (!how) { const fr = await link.fn(l.id, CHECK_ON_MS); fnOk = fr.ok; if (FN[l.id]) tried.push('function: ' + why(fr)); }
                 await new Promise((res) => setTimeout(res, CHECK_ON_MS));
-                if (how === 'own output') await link.set(l.id, false, 'release');
+                if (how === 'out') await link.set(l.id, false, 'release');
+                if (how === 'flm') await link.set(l.id, false);
+                link.how[l.id] = how === 'flm' ? 'flm' : 'out';
                 lit = new Set();
-                checked[l.id] = r.ok && how === 'own output' ? { ok: true, t: Date.now(), ms: r.ms }
-                    : { ok: false, fn: r.ok, why: r.ok ? how : r.nrc !== null ? NRC[r.nrc] || 'NRC ' + hex(r.nrc) : 'no answer', t: Date.now() };
-                log.info('lamp check: ' + l.name + ' (' + hex(l.out) + '): ' + (checked[l.id].ok ? 'works, ' + r.ms + ' ms' : checked[l.id].why));
+                checked[l.id] = how ? { ok: true, how, t: Date.now(), ms: r.ms }
+                    : { ok: false, fn: fnOk, why: fnOk ? 'function only (both sides)' : tried.join(', ') || 'no way', t: Date.now() };
+                log.info('lamp check: ' + l.name + ': ' + (how ? 'works by its ' + (how === 'flm' ? 'headlight module' : 'output') + ', ' + r.ms + ' ms' : checked[l.id].why) + ' [' + tried.join(', ') + ']');
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
             }
             save();
@@ -198,7 +213,7 @@ mgu.run({
                     : 'Start / stop button: run it (about ' + Math.round(LAMPS.length * (CHECK_ON_MS + CHECK_GAP_MS) / 1000) + ' s). Watch or film the car: the order is the list below.', 56, 170, 20, t.dim, { literal: true });
                 // the list in three columns: tick (took it), cross (refused, why), dot (not checked)
                 LAMPS.forEach((l, i) => {
-                    const col = Math.floor(i / 8), row = i % 8, x = 56 + col * 336, y = 222 + row * 34;
+                    const col = Math.floor(i / 8), row = i % 8, x = 56 + col * 336, y = 214 + row * 32;
                     const c = checked[l.id], now = check.running && check.at === i;
                     // a drawn mark (the car's font has no tick or cross): green works, amber refused, white now, grey not checked
                     const mc = now ? t.text : !c ? withAlpha(t.dim, 0.5) : c.ok ? GO : t.warn;
@@ -207,7 +222,11 @@ mgu.run({
                     cv.text((i + 1) + '. ' + l.name, x + 26, y, 17, now ? t.text : t.dim, { literal: true });
                     if (c && !c.ok) cv.text(c.why, x + 26, y + 15, 12, t.warn, { literal: true });
                 });
-                cv.text(linkLine, 56, 496, 16, t.dim, { literal: true });
+                // the output layouts the body controller was offered, and what it said to each
+                const pr = check.running && link.probed ? link.probed : checked._probed;
+                const prLine = pr ? 'Output request: ' + pr.map((x) => x.id + ' ' + x.why).join('  ·  ') + (checked._layout || (check.running && link.layout) ? '' : '  -  none taken') : '';
+                cv.text(prLine, 56, 482, 14, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
+                cv.text(linkLine, 56, 502, 14, t.dim, { literal: true });
                 G.panel(cv, t, 1088, 44, 488, 468, 'Now on');
                 car(cv, t, 1332, 104, 250, 380, lit, cur && cur.id);
             }
