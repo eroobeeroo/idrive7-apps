@@ -28,6 +28,7 @@ const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
 const SCENES = { map: [1088, 480], panel: [1920, 720], hud: [800, 480] };
 const HUD_VISIBLE_RIGHT = 680;   // the HUD shows up to x ~683 (a park's fill in the map reached it, photo on the road, G05)
+const HUD_RIGHT_GAP = 4;        // HUD: the panel's gap from the right edge of what the HUD shows
 const HUD_SPEED_CLEAR = 405;     // left edge limit: the speed readout ends at x ~331 and Waze's car icon at ~400 (85 % map, G05)
 const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_H = 60;             // the HUD panel's height at most (the room right of the speed limits it first)
@@ -112,10 +113,9 @@ function badgeRect(r, where, target, extras, hasPower) {
     const y = where === 'top' ? r.y + m : r.y + r.h - h - m;
     let x = r.x + Math.floor((r.w - w) / 2);
     if (target === 'hud' && where !== 'top') {
-        // right of the speed readout, but never past what the HUD shows: a wider meter (extra values) moves left
-        // as far as it must, down to HUD_SPEED_CLEAR
-        x = Math.max(x, HUD_SPEED_RIGHT);
-        x = Math.max(Math.min(x, hudRight - w), Math.min(HUD_SPEED_CLEAR, x));
+        // at the right edge of what the HUD shows (HUD_RIGHT_GAP in), away from the car arrow in the middle;
+        // never left of HUD_SPEED_CLEAR (the speed readout)
+        x = Math.max(HUD_SPEED_CLEAR, hudRight - HUD_RIGHT_GAP - w);
     }
     return { x, y, w, h };
 }

@@ -30,10 +30,10 @@ const check = (name, fn) => { fn(); ok++; console.log('ok   ' + name); };
 check('cluster map: the whole 1088x480 scene', () => assert.deepStrictEqual(mapRect('map', 0), { x: 0, y: 0, w: 1088, h: 480 }));
 check('panel: the centred map area', () => assert.deepStrictEqual(mapRect('panel', 0), { x: 416, y: 120, w: 1088, h: 480 }));
 check('HUD standard: 452x200 at 173,140 (as waze-on-cluster scales it)', () => assert.deepStrictEqual(mapRect('hud', 0), { x: 173, y: 140, w: 452, h: 200 }));
-check('HUD at 85 %, both values: 52-60 high, ends inside what the HUD shows (x 680)', () => {
+check('HUD at 85 %, at the right edge, both values: 52-60 high, ends inside what the HUD shows (x 680)', () => {
     const r = mapRect('hud', 85), b = badgeRect(r, 'bottom', 'hud', 2), kwOnly = badgeRect(r, 'bottom', 'hud', 0);
     assert(b.h >= 52 && b.h <= 60 && b.x >= 405 && b.x + b.w <= 680, JSON.stringify(b));
-    assert.strictEqual(kwOnly.x, 420);
+    assert.strictEqual(kwOnly.x + kwOnly.w, 676, 'a narrow panel sits at the right edge too');
 });
 check('HUD always, map on the cluster: the panel sits where it does with the map on the HUD (same HUD size)', () => {
     assert.deepStrictEqual(badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2), badgeRect(mapRect('hud', 85), 'bottom', 'hud', 2));
@@ -47,7 +47,7 @@ check('badge inside the map, bottom and top', () => {
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
     assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 440, y: 376, w: 208, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 420, y: 276, w: 172, h: 60 });   // the HUD's, right of its speed readout
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 449, y: 276, w: 172, h: 60 });   // the HUD's, at the map's right edge
 });
 
 /* ---------- drawing and diffs ---------- */
