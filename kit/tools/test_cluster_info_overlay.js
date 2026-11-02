@@ -88,7 +88,7 @@ class FakeCR extends EventEmitter {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'woc-'));
     const status = path.join(dir, 'status.json');
     const write = (o) => { fs.writeFileSync(status + '.tmp', JSON.stringify(o)); fs.renameSync(status + '.tmp', status); };
-    const settings = { v: { show: 'map', place: 'bottom' }, get(k) { return this.v[k]; } };
+    const settings = { v: { show: 'map', place: 'bottom', bar: 'on' }, get(k) { return this.v[k]; } };
     const logs = [];
     const log = { info: (m) => logs.push(m), warn: (m) => logs.push('WARN ' + m) };
     let kw = 18, fast = 0, t = 1e6;
@@ -198,17 +198,32 @@ class FakeCR extends EventEmitter {
     check('status for the diagnostics', () => { const st = ov.status(); assert(/connected|connecting/.test(st.renderer) && /hud/.test(st.map)); });
     extras = []; night = false; settings.v.nightDim = 'on';
 
-    /* the kW without its bar on the HUD (setting power 'hudNumber', the default), with it on the cluster */
+    /* the kW without its bar on the HUD (setting bar 'cluster', the default), with it on the cluster */
     t += 300; ov._tick();
     const withBar = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.visible && l.h > 30);
-    settings.v.power = 'hudNumber'; t += 300; ov._tick();
+    settings.v.bar = 'cluster'; t += 300; ov._tick();
     const noBar = [...cr.layers.values()].find((l) => l.klass === 'overlay' && l.visible && l.h > 30);
     check('kW only on the HUD: a narrower panel without the bar', () => assert(withBar && noBar && noBar.w < withBar.w, JSON.stringify([withBar && withBar.w, noBar && noBar.w])));
     check('the panel geometry without a bar is narrower than with it', () => {
         const r = mapRect('hud', 70);
         assert(badgeRect(r, 'bottom', 'hud', 2, 'number').w < badgeRect(r, 'bottom', 'hud', 2, true).w || badgeRect(r, 'bottom', 'hud', 2, 'number').h > badgeRect(r, 'bottom', 'hud', 2, true).h);
     });
-    delete settings.v.power;
+    settings.v.bar = 'on';
+
+    /* the kW meter in any slot: drawn after the values in slots before it */
+    check('the kW meter in the middle slot: a value, the meter, a value (pixels differ from meter-first)', () => {
+        const ex = [{ label: 'OIL', text: '88°', slot: 0 }, { label: 'BATT', text: '24°', slot: 2 }];
+        const b = badgeRect(mapRect('map', 0), 'bottom', 'map', 2, true);
+        const a1 = new Canvas(b.w, b.h), a2 = new Canvas(b.w, b.h);
+        drawBadge(a1, theme, Object.assign(pw(12), { bar: true }), 100, 50, ex, 0);
+        drawBadge(a2, theme, Object.assign(pw(12), { bar: true }), 100, 50, ex, 1);
+        assert(changed(a1.d, a2.d, b.w, b.h, Math.round(b.w / 2)));
+        // the left quarter of meter-in-the-middle holds a value's text, no bar track
+        const q = Math.round(b.w / 4);
+        let lit = 0;
+        for (let y = 0; y < b.h; y++) for (let x = 0; x < q; x++) if (a2.d[(y * b.w + x) * 4] > 200) lit++;
+        assert(lit > 0);
+    });
 
     /* no power provider (a car without eDrive Live): the values alone */
     kw = null; extras = [{ label: 'OIL', text: '88°' }, { label: 'COOL', text: '90°' }]; t += 300; ov._tick();

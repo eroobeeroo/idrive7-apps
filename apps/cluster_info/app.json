@@ -1,8 +1,8 @@
 {
   "id": "cluster_info",
   "title": "Cluster Info",
-  "description": "A small panel of live values (battery power from eDrive Live, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
-  "version": "1.1.0",
+  "description": "A small panel of up to three live values (battery power from eDrive Live, battery charge, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
+  "version": "1.2.0",
   "vendor": "custom",
   "loggingId": "OA9E",
   "iconGlyph": "gauge",
@@ -73,32 +73,40 @@
       ]
     },
     {
-      "key": "power",
-      "label": "Battery power (kW, from eDrive Live)",
+      "key": "slot1",
+      "label": "Panel: first item",
       "type": "choice",
-      "default": "hudNumber",
+      "default": "power",
       "options": [
         [
-          "hudNumber",
-          "kW and bar; kW only on the HUD"
+          "none",
+          "Nothing"
         ],
         [
-          "on",
-          "kW and bar"
+          "power",
+          "Battery power (kW, from eDrive Live)"
         ],
         [
-          "number",
-          "kW only (no bar)"
+          "soc",
+          "Battery charge (%)"
         ],
         [
-          "off",
-          "Hide"
+          "battery",
+          "Battery temperature"
+        ],
+        [
+          "oil",
+          "Engine oil temperature"
+        ],
+        [
+          "coolant",
+          "Coolant temperature"
         ]
       ]
     },
     {
-      "key": "value1",
-      "label": "First value",
+      "key": "slot2",
+      "label": "Panel: second item",
       "type": "choice",
       "default": "battery",
       "options": [
@@ -107,6 +115,14 @@
           "Nothing"
         ],
         [
+          "power",
+          "Battery power (kW, from eDrive Live)"
+        ],
+        [
+          "soc",
+          "Battery charge (%)"
+        ],
+        [
           "battery",
           "Battery temperature"
         ],
@@ -117,16 +133,12 @@
         [
           "coolant",
           "Coolant temperature"
-        ],
-        [
-          "soc",
-          "Battery charge (%)"
         ]
       ]
     },
     {
-      "key": "value2",
-      "label": "Second value",
+      "key": "slot3",
+      "label": "Panel: third item",
       "type": "choice",
       "default": "oil",
       "options": [
@@ -135,6 +147,14 @@
           "Nothing"
         ],
         [
+          "power",
+          "Battery power (kW, from eDrive Live)"
+        ],
+        [
+          "soc",
+          "Battery charge (%)"
+        ],
+        [
           "battery",
           "Battery temperature"
         ],
@@ -145,10 +165,26 @@
         [
           "coolant",
           "Coolant temperature"
+        ]
+      ]
+    },
+    {
+      "key": "bar",
+      "label": "Bar after the kW",
+      "type": "choice",
+      "default": "cluster",
+      "options": [
+        [
+          "cluster",
+          "On the cluster only"
         ],
         [
-          "soc",
-          "Battery charge (%)"
+          "on",
+          "On the cluster and HUD"
+        ],
+        [
+          "off",
+          "Never"
         ]
       ]
     },

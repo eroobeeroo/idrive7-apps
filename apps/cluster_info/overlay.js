@@ -124,25 +124,34 @@ function badgeRect(r, where, target, extras, hasPower) {
  * Draws the panel: dark rounded backdrop; with pw (the power) the kW right-aligned, "kW", then the bar (regen
  * left, use right); then the extra values, each a small label over its value. Without pw: the values alone.
  */
-function drawBadge(cv, t, pw, outMax, inMax, extras) {
+function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt) {
     extras = extras || [];
     const bar = !!pw && pw.bar !== false;
-    const W = cv.w, h = cv.h, L = layout(h, bar), w = pw ? Math.max(0, W - extras.length * colW(h)) : 0;
+    const W = cv.w, h = cv.h, L = layout(h, bar), pwW = pw ? Math.max(L.w, W - extras.length * colW(h)) : 0;
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
-    const cw = extras.length ? (W - w) / extras.length : 0;
-    extras.forEach((e, i) => {
-        const cx = Math.round(w + cw * (i + (pw ? 0.42 : 0.5)));
+    // the items left to right: the kW meter at its slot (powerAt among them), the values in the room left
+    const n = extras.length + (pw ? 1 : 0), at = pw ? Math.min(Math.max(0, powerAt || 0), extras.length) : -1;
+    const cw = extras.length ? (W - pwW - (pw ? 0 : 0)) / extras.length : 0;
+    let x = 0, vi = 0;
+    for (let i = 0; i < n; i++) {
+        if (i === at) { drawPower(cv, t, pw, outMax, inMax, x, pwW, h, L, bar); x += pwW; continue; }
+        const e = extras[vi++];
+        const cx = Math.round(x + cw * (pw && i === at + 1 ? 0.42 : pw && i === at - 1 ? 0.58 : 0.5));
         cv.text(e.label, cx, Math.round(h * 0.33), Math.round(h * 0.22), t.dim, { font: 'bold', align: 'center', literal: true });
         cv.text(e.text, cx, Math.round(h * 0.84), Math.round(h * 0.5), e.col || t.text, { font: 'bold', align: 'center', literal: true });
-    });
-    if (!pw) return;
-    // (the base part is at least as wide as its layout; rounding up to a multiple of 4 goes to the bar)
+        x += cw;
+    }
+}
+
+/** The kW meter in the panel at x, w wide: the kW right-aligned, "kW", then the bar (regen left, use right). */
+function drawPower(cv, t, pw, outMax, inMax, x, w, h, L, bar) {
+    // (the block is at least as wide as its layout; rounding up to a multiple of 4 goes to the bar)
     const base = Math.round(h * 0.69);
-    cv.text(pw.text, L.numR, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
-    cv.text('kW', L.unitX, base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
+    cv.text(pw.text, x + L.numR, base, Math.round(h * 0.54), pw.col, { font: 'bold', align: 'right', literal: true });
+    cv.text('kW', x + L.unitX, base, Math.round(h * 0.25), t.dim, { font: 'bold', literal: true });
     if (!bar) return;
-    const bx = L.bx, bw = Math.max(L.bw, w - L.bx - L.pad), bh = Math.max(6, Math.round(h * 0.2)), by = Math.round((h - bh) / 2);
+    const bx = x + L.bx, bw = Math.max(L.bw, w - L.bx - L.pad), bh = Math.max(6, Math.round(h * 0.2)), by = Math.round((h - bh) / 2);
     const span = outMax + inMax, x0 = bx + bw * inMax / span;
     const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
     cv.roundRect(bx, by, bw, bh, bh / 2, withAlpha(t.track, 0.95));
@@ -299,10 +308,10 @@ function startOverlay(ctx, lv, opts) {
         const t = ctx.theme(), p = lv.power ? lv.power(t) : null, pw = p && G.isNum(p.kw) ? p : null;
         const extras = lv.extras ? (lv.extras(t) || []).filter((e) => e && e.text !== '--') : [];
         if (!pw && !extras.length) return hide();          // nothing to show (parked, asleep, no provider)
-        // the bar after the kW (setting power): 'on' everywhere, 'hudNumber' on the cluster only, 'number' nowhere
+        // the bar after the kW (setting bar): 'on' everywhere, 'cluster' on the cluster only, 'off' nowhere
         if (pw) {
-            const pwr = settings.get('power'), tg = place().target;
-            pw.bar = pwr === 'on' || (pwr === 'hudNumber' && tg !== 'hud') || (pwr === undefined);
+            const bs = settings.get('bar'), tg = place().target;
+            pw.bar = bs === 'on' || ((bs === 'cluster' || bs === undefined) && tg !== 'hud');
         }
         if (!layer(extras.length, pw ? (pw.bar ? true : 'number') : false)) return undefined;
         const op = place().target === 'hud' ? hudOpacity() : 1;
@@ -312,7 +321,9 @@ function startOverlay(ctx, lv, opts) {
         lastT = tm;
         const lim = (lv.limits && lv.limits()) || {};
         const outMax = G.isNum(lim.outMax) && lim.outMax > 0 ? lim.outMax : 100, inMax = G.isNum(lim.inMax) && lim.inMax > 0 ? lim.inMax : outMax * 0.5;
-        drawBadge(cv, t, pw, outMax, inMax, extras);
+        // the kW meter after the values in slots before its own (values without a reading are left out)
+        const pAt = lv.powerAt ? extras.filter((e) => (e.slot || 0) < lv.powerAt()).length : 0;
+        drawBadge(cv, t, pw, outMax, inMax, extras, pAt);
         const d = cv.d;
         if (!last) {
             cr.pixels(ref, null, Buffer.from(d.buffer, d.byteOffset, d.length));

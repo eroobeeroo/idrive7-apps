@@ -77,7 +77,7 @@ mgu.run({
          * The head unit's current user account (SessionManager.currentUserAccountReference: a getter only, read
          * every 5 s). Each driver keeps their own PROFILE_KEYS in profiles.json: a change is kept for the driver at
          * the time, and a driver seen again gets theirs back; one seen for the first time keeps what is set. */
-        const PROFILE_KEYS = ['show', 'place', 'power', 'value1', 'value2', 'turnSignals', 'hudBrightness', 'nightDim'];
+        const PROFILE_KEYS = ['show', 'place', 'slot1', 'slot2', 'slot3', 'bar', 'turnSignals', 'hudBrightness', 'nightDim'];
         const PROFILE_FILE = path.join(ctx.dataDir, 'profiles.json');
         let profiles = {}, applying = false;
         try { profiles = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8')) || {}; } catch (e) { /* none yet */ }
@@ -111,7 +111,10 @@ mgu.run({
         }, 'driver profile', { pollMs: 5000 }, 'de.bmw.infotainment.personalization.SessionManager');
 
         /* ---------- what the panel shows ---------- */
-        const chosen = () => [settings.get('value1'), settings.get('value2')].filter((k, i, a) => VALUES[k] && a.indexOf(k) === i);
+        /** The three slots in order: 'power' (the kW meter) or a value's name; none and repeats left out. */
+        const slots = () => [settings.get('slot1'), settings.get('slot2'), settings.get('slot3')]
+            .filter((k, i, a) => (k === 'power' || VALUES[k]) && a.indexOf(k) === i);
+        const chosen = () => slots().filter((k) => k !== 'power');
         /** A value now, in deg C: the car's own (oil, coolant) first, else a provider's; { c, src } or null. */
         function valueNow(name) {
             const d = car.data();
@@ -127,7 +130,7 @@ mgu.run({
         };
         const src = {
             power(t) {
-                if (settings.get('power') === 'off') return null;
+                if (slots().indexOf('power') < 0) return null;
                 const p = providers.power();
                 if (!p) return null;
                 const v = p.kw, a = Math.abs(v);
@@ -137,10 +140,12 @@ mgu.run({
             extras(t) {
                 return chosen().map((k) => {
                     const v = valueNow(k);
-                    return { label: (v && v.label) || VALUES[k].label, text: v ? (G.isNum(v.c) ? temp(v.c) : v.text || '--') : '--', col: k === 'soc' ? (v ? t.text : t.dim) : tempCol(t, k, v && v.c) };
+                    return { slot: slots().indexOf(k), label: (v && v.label) || VALUES[k].label, text: v ? (G.isNum(v.c) ? temp(v.c) : v.text || '--') : '--', col: k === 'soc' ? (v ? t.text : t.dim) : tempCol(t, k, v && v.c) };
                 });
             },
-            keepFast() { providers.want({ power: settings.get('power') !== 'off', values: chosen() }); },
+            /** The kW meter's slot (0-2 among the slots in use; values with a lower slot go before it). */
+            powerAt() { return Math.max(0, slots().indexOf('power')); },
+            keepFast() { providers.want({ power: slots().indexOf('power') >= 0, values: chosen() }); },
             indicator: () => live.indicator,
             night: () => live.night === true,
         };
@@ -166,7 +171,8 @@ mgu.run({
                     text: (str, x, y, size, c, o) => cv.text(str, ox + x * k, oy + y * k, size * k, c, o),
                     textWidth: (str, size, o) => cv.textWidth(str, size * k, o) / k,
                 };
-                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex);
+                if (pw) pw.bar = settings.get('bar') !== 'off';            // (as on the cluster)
+                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex, ex.filter((e) => e.slot < src.powerAt()).length);
             } else {
                 cv.text('Nothing to show now: no power from an app, and no value chosen has a reading', 800, 150, 24, t.dim, { align: 'center' });
             }
