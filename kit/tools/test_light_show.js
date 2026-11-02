@@ -239,7 +239,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     });
     bdc.noRelease = true; bdc.releaseNrc = 0x22;            // (and the give-back request refused, as on the G05)
     bdc.carOn = new Set([0x14, 0x15, 0x0B]);               // tail lights and the left fog on before the show
-    await sleep(1000);                                     // (the check's last timed outputs run out)
+    await sleep(300);
+    Object.keys(bdc.timers).forEach((k) => clearTimeout(bdc.timers[k])); bdc.state = {};   // (the check's timed outputs: over)
     S.pattern = 'chase';
     const show = await run(900);
     check('a light show starts dark: lamps on before it (tail, fog) held off, timed; the brake lights never touched', () => {
