@@ -106,6 +106,12 @@ if (glyph === 'gauge') {
     c.convex([[96, 56], [74, 64], [78, 78], [94, 74]], A);
     c.convex([[70, 82], [64, 94], [76, 94]], '#000000');     // nose
     for (let i = 0; i < 4; i++) c.fillRect(52 + i * 11, 104, 3, 16, '#000000');   // teeth
+} else if (glyph === 'lights') {
+    // a headlamp with its beams, an amber flash beside it
+    c.strokeRoundRect(14, 46, 54, 52, 18, 6, W);
+    c.circle(41, 72, 11, W);
+    for (const [y0, y1] of [[52, 38], [72, 72], [92, 106]]) c.line(80, y0, 124, y1, 6, W);
+    c.polyline([[50, 6], [40, 22], [52, 22], [42, 38]], 5, '#ffad1f');
 } else {
     c.strokeRoundRect(14, 14, 112, 112, 22, 6, W);
     c.text(glyph, 70, 88, 56, W, { font: 'bold', align: 'center' });

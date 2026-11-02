@@ -1,13 +1,13 @@
 #!/bin/bash
 # This fork's rules for an upstream merge (sync-upstream.yml). The fork carries only eDrive Live (apps/edrive2) and
-# Cluster Info (apps/cluster_info):
+# Cluster Info (apps/cluster_info) and Light Show (apps/light_show):
 #   during a conflicted merge: eDrive Live is this fork's own (upstream folded it into eDrive), so its files
 #   stay as here; a file this fork deleted that upstream changed stays deleted, and so does any other app's;
 #   README.md takes upstream's text with this fork's note (readme-note.md) on top;
 #   --after (the merge committed): an app upstream added or brought back is taken out again, the fork's own
 #   test workflow and Store manifest settings are kept, and the workflow for removed apps stays gone.
 set -u
-KEEP_APPS=' edrive2 cluster_info '
+KEEP_APPS=' edrive2 cluster_info light_show '
 HERE=$(cd "$(dirname "$0")" && pwd)
 if [ "${1:-}" = "--after" ]; then
     for d in apps/*/; do
@@ -29,7 +29,7 @@ git status --porcelain | while read -r code path; do
         DU) git rm -qf "$path"; echo "rule: kept deleted $path (deleted here, changed upstream)";;
         UU|AA|AU|UA|UD)
             case "$path" in
-                apps/edrive2/*|apps/cluster_info/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
+                apps/edrive2/*|apps/cluster_info/*|apps/light_show/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
                 apps/*) git rm -qf "$path" 2>/dev/null || true; echo "rule: dropped $path (an app this fork doesn't carry)";;
                 .github/workflows/app-tests.yml) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path (its own test list)";;
                 README.md)

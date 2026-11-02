@@ -1,0 +1,216 @@
+{
+  "id": "light_show",
+  "title": "Light Show",
+  "description": "Flash the exterior lamps in patterns through the body controller's lamp test functions: emergency patterns (wig-wag and more, on lamps that are normally off while driving) and light shows. A lamp check finds which lamps the car lets the app switch.",
+  "version": "0.1.0",
+  "vendor": "custom",
+  "loggingId": "OA9F",
+  "iconGlyph": "lights",
+  "signals": {
+    "com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu": {
+      "_instances": "SystemFunctionsInternalTasuInst1",
+      "_methods": [
+        "sendTasuRequest"
+      ],
+      "_broadcasts": [
+        "sendTasuResponse"
+      ]
+    },
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "statusCarSpeed2": "rs"
+    }
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Light Show",
+      "buttons": [
+        [
+          "BTN_RUN",
+          "Start / stop"
+        ],
+        [
+          "BTN_PATTERN",
+          "Next pattern"
+        ],
+        [
+          "BTN_PAGE",
+          "Next page"
+        ],
+        [
+          "BTN_SETTINGS",
+          "Settings"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "pattern",
+      "label": "Pattern",
+      "type": "choice",
+      "default": "wigwag",
+      "options": [
+        [
+          "wigwag",
+          "Wig-wag"
+        ],
+        [
+          "wigwag_fog",
+          "Wig-wag + fogs"
+        ],
+        [
+          "double",
+          "Double flash"
+        ],
+        [
+          "full",
+          "Front and rear"
+        ],
+        [
+          "rear",
+          "Rear only"
+        ],
+        [
+          "corners",
+          "Corner strobe"
+        ],
+        [
+          "chase",
+          "Chase (show)"
+        ],
+        [
+          "sweep",
+          "Sweep (show)"
+        ],
+        [
+          "all",
+          "Everything (show)"
+        ],
+        [
+          "blink",
+          "Blink (show)"
+        ]
+      ]
+    },
+    {
+      "key": "speed",
+      "label": "Speed",
+      "type": "choice",
+      "default": "1",
+      "options": [
+        [
+          "0.5",
+          "Half"
+        ],
+        [
+          "0.75",
+          "Slower"
+        ],
+        [
+          "1",
+          "Normal"
+        ],
+        [
+          "1.5",
+          "Faster"
+        ],
+        [
+          "2",
+          "Double"
+        ]
+      ]
+    },
+    {
+      "key": "parkedOnly",
+      "label": "Only while parked",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "autoStop",
+      "label": "Stop by itself after",
+      "type": "choice",
+      "default": "0",
+      "options": [
+        [
+          "0",
+          "No limit"
+        ],
+        [
+          "1",
+          "1 minute"
+        ],
+        [
+          "5",
+          "5 minutes"
+        ],
+        [
+          "15",
+          "15 minutes"
+        ],
+        [
+          "30",
+          "30 minutes"
+        ]
+      ]
+    },
+    {
+      "key": "theme",
+      "label": "Colour theme",
+      "type": "choice",
+      "default": "m_tricolour",
+      "options": [
+        [
+          "m_red",
+          "M Red"
+        ],
+        [
+          "m_tricolour",
+          "M Tricolour"
+        ],
+        [
+          "ice",
+          "Ice White"
+        ],
+        [
+          "amber",
+          "Night Amber"
+        ]
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "Screen layout",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        [
+          "full",
+          "Full screen"
+        ],
+        [
+          "standard",
+          "Standard"
+        ]
+      ]
+    },
+    {
+      "key": "renderer",
+      "label": "Renderer",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "GPU 60 fps (default)"
+        ],
+        [
+          "software",
+          "Software"
+        ]
+      ]
+    }
+  ]
+}

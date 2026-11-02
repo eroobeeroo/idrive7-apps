@@ -1,0 +1,115 @@
+'use strict';
+/**
+ * patterns.js - the flash patterns and the player that runs one on the lamps (lamps.js).
+ *
+ * A pattern is frames: { on: [lamp ids lit in this frame], ms }. Between frames only the lamps that change are
+ * sent. Two kinds:
+ *   emergency: only lamps that are normally off while driving (high beams, fog lights, turn signals, rear fog,
+ *              reversing lights); a lamp's dark phase gives it back to the car, so the low beams, tail lights and
+ *              brake lights stay the car's own the whole time.
+ *   show:      any lamp, held dark between flashes (parked: a light show).
+ */
+const { BY_ID } = require('./lamps');
+
+const f = (ms, ...on) => ({ ms, on });
+const PATTERNS = [
+    { id: 'wigwag', name: 'Wig-wag', kind: 'emergency', what: 'High beams, left and right in turn',
+        frames: [f(350, 'highL'), f(350, 'highR')] },
+    { id: 'wigwag_fog', name: 'Wig-wag + fogs', kind: 'emergency', what: 'High beams in turn, each with the opposite fog light',
+        frames: [f(350, 'highL', 'fogR'), f(350, 'highR', 'fogL')] },
+    { id: 'double', name: 'Double flash', kind: 'emergency', what: 'Two quick flashes left, then two right',
+        frames: [f(90, 'highL'), f(70), f(90, 'highL'), f(160), f(90, 'highR'), f(70), f(90, 'highR'), f(160)] },
+    { id: 'full', name: 'Front and rear', kind: 'emergency', what: 'High beams in turn, rear turn signals and rear fogs opposite',
+        frames: [f(400, 'highL', 'indRR', 'rfogR'), f(400, 'highR', 'indRL', 'rfogL')] },
+    { id: 'rear', name: 'Rear only', kind: 'emergency', what: 'Rear turn signals and rear fog lights in turn (pulled over, facing traffic)',
+        frames: [f(350, 'indRL', 'rfogL'), f(350, 'indRR', 'rfogR')] },
+    { id: 'corners', name: 'Corner strobe', kind: 'emergency', what: 'All turn signals, front and rear corners crossed',
+        frames: [f(120, 'indFL', 'indRR'), f(80), f(120, 'indFL', 'indRR'), f(180), f(120, 'indFR', 'indRL'), f(80), f(120, 'indFR', 'indRL'), f(180)] },
+    { id: 'chase', name: 'Chase', kind: 'show', what: 'Around the car, corner to corner',
+        frames: [f(180, 'indFL', 'fogL'), f(180, 'indFR', 'fogR'), f(180, 'indSR', 'indRR'), f(180, 'indRL', 'indSL')] },
+    { id: 'sweep', name: 'Sweep', kind: 'show', what: 'Across the front and back, out and back',
+        frames: [f(140, 'indFL', 'indRL'), f(140, 'fogL', 'brakeL'), f(140, 'highL', 'brakeM'), f(140, 'highR', 'brakeM'),
+            f(140, 'fogR', 'brakeR'), f(140, 'indFR', 'indRR'), f(140, 'fogR', 'brakeR'), f(140, 'highR', 'brakeM'), f(140, 'highL', 'brakeM'), f(140, 'fogL', 'brakeL')] },
+    { id: 'all', name: 'Everything', kind: 'show', what: 'Every lamp on, then every lamp off',
+        frames: [f(400, 'lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'fogL', 'fogR', 'indFL', 'indFR', 'indSL', 'indSR', 'indRL', 'indRR',
+            'tailL', 'tailR', 'brakeL', 'brakeR', 'brakeM', 'rfogL', 'rfogR', 'revL', 'revR', 'plate'), f(400)] },
+    { id: 'blink', name: 'Blink', kind: 'show', what: 'Headlights and tail lights dark, then a flash, like a wink',
+        frames: [f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
+];
+const PATTERN = {};
+PATTERNS.forEach((p) => { PATTERN[p.id] = p; });
+
+/** The lamps a pattern uses (each once). */
+const lampsOf = (p) => Array.from(new Set([].concat(...p.frames.map((fr) => fr.on))));
+/** An emergency pattern never takes over a lamp the car keeps on (or uses for braking) while driving. */
+function safeForDriving(p) { return lampsOf(p).every((id) => BY_ID[id] && !BY_ID[id].usual); }
+
+/**
+ * Runs one pattern on the link until stopped.
+ *   const pl = new Player(link, { usable(id) -> bool, onFrame(lit Set), log });
+ *   pl.start(PATTERN.wigwag, 1);  pl.stop() -> Promise (every lamp back);  pl.running
+ */
+class Player {
+    constructor(link, opts) {
+        this.link = link; this.opts = opts || {};
+        this.now = this.opts.now || Date.now;
+        // a frame's wait ends early on stop (the lamps go back at once)
+        this.wait = this.opts.wait || ((ms) => new Promise((r) => { const tm = setTimeout(r, ms); this.wake = () => { clearTimeout(tm); r(); }; }));
+        this.wake = null;
+        this.running = false; this.pattern = null; this.lit = new Set(); this.late = 0; this.frames = 0;
+        this.stopping = null; this.error = null;
+    }
+    start(pattern, speed) {
+        if (this.running) return;
+        this.pattern = pattern; this.speed = speed || 1; this.running = true; this.error = null; this.frames = 0; this.late = 0;
+        this.loop = this._run().catch((e) => { this.error = String(e.message || e); this.opts.log && this.opts.log.warn('light show: ' + this.error); })
+            .then(() => this._end());
+    }
+    /** stop, and give every lamp back */
+    stop() {
+        this.running = false;
+        if (this.wake) this.wake();
+        return this.loop || Promise.resolve();
+    }
+    setPattern(p) { this.pattern = p; }
+    async _run() {
+        const ok = await this.link.start();
+        if (!ok && this.opts.log) this.opts.log.warn('light show: no extended session: trying the lamps anyway');
+        let i = 0, t = this.now();
+        while (this.running) {
+            const p = this.pattern, fr = p.frames[i % p.frames.length];
+            const offAs = p.kind === 'emergency' && !this.link.noRelease ? 'release' : 'off';
+            const want = new Set(fr.on.filter((id) => this._usable(id, p)));
+            // lamps going dark first (a frame never has two sides lit at once), then the ones coming on
+            for (const id of Array.from(this.lit)) if (!want.has(id)) { await this.link.set(id, false, offAs); this.lit.delete(id); }
+            for (const id of want) {
+                if (!this.running) break;
+                if (this.lit.has(id)) continue;
+                const r = await this.link.set(id, true);
+                if (r.ok) this.lit.add(id);
+                else if (r.nrc !== null && this.opts.refused) this.opts.refused(id, r.nrc);
+            }
+            if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
+            this.frames++;
+            t += fr.ms / this.speed;
+            const left = t - this.now();
+            if (left > 0) await this.wait(left);
+            else if (left < -1000) { this.late++; t = this.now(); }      // far behind (the link is slow): start over from now
+            i++;
+        }
+    }
+    _usable(id, p) {
+        const l = BY_ID[id];
+        if (!l) return false;
+        // held-dark lamps (no single release) that are normally on would stay dark: never in an emergency pattern
+        if (p.kind === 'emergency' && l.usual) return false;
+        return !this.opts.usable || this.opts.usable(id);
+    }
+    async _end() {
+        this.lit.clear();
+        if (this.opts.onFrame) this.opts.onFrame(this.lit, -1);
+        await this.link.stop();
+    }
+}
+
+module.exports = { PATTERNS, PATTERN, Player, lampsOf, safeForDriving };
