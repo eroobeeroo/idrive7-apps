@@ -77,12 +77,22 @@ class Player {
     async _run() {
         const ok = await this.link.start();
         if (!this.link.layout && !this.link.probed && this.opts.needsLayout && this.opts.needsLayout()) await this.link.probe();
+        // lamps held dark while it runs (a light show starts dark: lamps on before it don't stay on); timed outputs are
+        // sent again each frame (they go back by themselves), held ones once
+        const dark = new Set(this.opts.dark ? await this.opts.dark(this.pattern) : []);
+        const darkSent = new Set();
+        this.darkCount = dark.size;
         if (!ok && this.opts.log) this.opts.log.warn('light show: no extended session: trying the lamps anyway');
         let i = 0, t = this.now();
         while (this.running) {
             const p = this.pattern, fr = p.frames[i % p.frames.length];
             const offAs = p.kind === 'emergency' && !this.link.noRelease ? 'release' : 'off';
             const want = new Set(fr.on.filter((id) => this._usable(id, p)));
+            for (const id of dark) {
+                if (!this.running || want.has(id) || this.lit.has(id) || (darkSent.has(id) && !this.link.timer)) continue;
+                const r = await this.link.set(id, false, 'off', fr.ms / this.speed);
+                if (r.ok) darkSent.add(id);
+            }
             // lamps going dark first (a frame never has two sides lit at once), then the ones coming on
             for (const id of Array.from(this.lit)) if (!want.has(id)) { if (!this._fn(id)) await this.link.set(id, false, offAs); this.lit.delete(id); }
             for (const id of want) {

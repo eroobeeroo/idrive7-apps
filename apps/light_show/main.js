@@ -17,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUT, hex, why } = require('./lamps');
+const { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUT, HIGH_TRIES, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
 
 const W = 1600, H = 520;
@@ -50,10 +50,12 @@ mgu.run({
         const save = () => { try { fs.writeFileSync(FILE, JSON.stringify(checked)); } catch (e) { log.warn('light show: ' + e.message); } };
         // a lamp works through its own output, or through its lamp function when that is its side's alone
         const sideFn = (id) => !!(checked[id] && checked[id].fn && FN[id] && Object.keys(FN).filter((k) => FN[k] === FN[id]).every((k) => BY_ID[k].side === BY_ID[id].side));
-        const usable = (id) => !checked[id] || checked[id].ok !== false || sideFn(id);
+        // (the mirrors' side repeaters only light with their whole side's turn signals: never in a pattern)
+        const usable = (id) => !BY_ID[id].outDark && (!checked[id] || checked[id].ok !== false || sideFn(id));
         // what the last check found: the output layout, each lamp's way (its output, or its headlight module)
         const restore = () => {
             if (checked._layout && LAYOUT[checked._layout]) link.layout = LAYOUT[checked._layout];
+            link.timer = checked._timer || null;
             LAMPS.forEach((l) => { link.how[l.id] = checked[l.id] && checked[l.id].how === 'flm' ? 'flm' : 'out'; });
         };
         restore();
@@ -68,7 +70,7 @@ mgu.run({
         /* ---------- the player ---------- */
         let lit = new Set(), frameAt = -1, startedAt = 0, stopWhy = '';
         const player = new Player(link, {
-            log, usable, needsLayout: () => LAMPS.some((l) => link.how[l.id] !== 'flm' && usable(l.id) && !(checked[l.id] && checked[l.id].ok === false)), viaFn: (id) => !!(checked[id] && checked[id].ok === false && sideFn(id)),
+            log, usable, dark: darkAtStart, needsLayout: () => LAMPS.some((l) => link.how[l.id] !== 'flm' && usable(l.id) && !(checked[l.id] && checked[l.id].ok === false)), viaFn: (id) => !!(checked[id] && checked[id].ok === false && sideFn(id)),
             onFrame: (l, i) => { lit = new Set(l); frameAt = i; },
             refused: (id, nrc) => {
                 // refused during a pattern: left out until the next lamp check
@@ -85,11 +87,23 @@ mgu.run({
             log.info('light show: ' + pattern().name + ' started');
             player.start(pattern(), speedK());
         }
+        /** A light show starts dark: the lamps that are on now (read from the body controller) are held off while it
+         *  runs, so a flash is never a lamp that was on anyway. Only lamps the app can give back: normally-off ones,
+         *  and the others (tail, plate) only when outputs are timed (they go back by themselves). Never the brake
+         *  lights. Emergency patterns leave every other lamp alone. */
+        async function darkAtStart(p) {
+            if (p.kind !== 'show' || !link.layout) return [];
+            const st = await link.readStates();
+            if (!st) return [];
+            return LAMPS.filter((l) => link.how[l.id] === 'out' && !l.outDark && st[l.out] && l.usual !== 'brake' && (!l.usual || link.timer)
+                && !(checked[l.id] && checked[l.id].ok === false)).map((l) => l.id);
+        }
         async function stop(why) {
             if (!player.running) return;
             stopWhy = why || '';
             log.info('light show: stopped' + (why ? ' (' + why + ')' : ''));
             await player.stop();
+            await verifyBack();
         }
         settings.onChange && settings.onChange((key) => {
             if (key === 'pattern' && player.running) player.setPattern(pattern());
@@ -116,6 +130,11 @@ mgu.run({
             lit = new Set();
             checked._layout = link.layout ? link.layout.id : null;
             checked._probed = link.probed;
+            // whether its last byte is a time (the rear fog light on, its state read until it goes dark by itself)
+            check.at = -1; check.step = 'Timing the outputs (rear fog light left)'; lit = new Set(['rfogL']);
+            await link.probeTimer();
+            lit = new Set(); check.step = null;
+            checked._timer = link.timer; checked._timerTried = link.timerTried;
             for (let i = 0; i < LAMPS.length && check.running; i++) {
                 const l = LAMPS[i];
                 check.at = i; lit = new Set([l.id]);
@@ -127,6 +146,9 @@ mgu.run({
                 if (!how && link.layout && !l.outDark) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
                 let fnOk = false;
                 if (!how) { const fr = await link.fn(l.id, CHECK_ON_MS); fnOk = fr.ok; if (FN[l.id]) tried.push('function: ' + why(fr)); }
+                // what the body controller says its output is now (an output it took but didn't switch: read 0)
+                let read = null;
+                if (how === 'out') { await new Promise((res) => setTimeout(res, 300)); const st = await link.readStates(); read = st ? st[l.out] : null; }
                 await new Promise((res) => setTimeout(res, CHECK_ON_MS));
                 // back to the car. Refused: a lamp that is normally off is held dark (lamps.js); one the car keeps on
                 // (brake, tail, plate) is never held dark - it's marked stuck and the page says what to do
@@ -135,14 +157,35 @@ mgu.run({
                 if (how === 'flm') gave = await link.set(l.id, false);
                 link.how[l.id] = how === 'flm' ? 'flm' : 'out';
                 lit = new Set();
-                checked[l.id] = how ? { ok: true, how, back: gave.ok ? 'ok' : why(gave), t: Date.now(), ms: r.ms }
+                checked[l.id] = how ? { ok: true, how, back: gave.ok ? (gave.timed ? 'by itself' : 'ok') : why(gave), read, t: Date.now(), ms: r.ms }
                     : { ok: false, fn: fnOk, why: fnOk ? 'function only (both sides)' : tried.join(', ') || 'no way', t: Date.now() };
                 log.info('lamp check: ' + l.name + ': ' + (how ? 'works by its ' + (how === 'flm' ? 'headlight module' : 'output') + ', ' + r.ms + ' ms' : checked[l.id].why) + ' [' + tried.join(', ') + ']');
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
             }
+            // the high beams lit by nothing so far: four other functions in the left headlight, A to D, 1.5 s each
+            checked._highTries = [];
+            for (let i = 0; i < HIGH_TRIES.length && check.running; i++) {
+                check.at = -1; check.step = 'High beam left: try ' + 'ABCD'[i] + ' of A-D (which one lit?)'; lit = new Set(['highL']);
+                const r = await link.lvTry(FLM_L, HIGH_TRIES[i], 2);
+                checked._highTries.push('ABCD'[i] + ' ' + hex(HIGH_TRIES[i]) + ' ' + why(r));
+                await new Promise((res) => setTimeout(res, 1500));
+                await link.lvTry(FLM_L, HIGH_TRIES[i], 0);
+                lit = new Set();
+                await new Promise((res) => setTimeout(res, 700));
+            }
+            check.step = null;
             save();
             await link.stop();
+            await verifyBack();
             check.running = false; check.at = -1;
+        }
+        /** after the lamps were given back: the brake lights read from the body controller (the pedal not pressed,
+         *  they're off) - still on: stuck, whatever the replies said */
+        async function verifyBack() {
+            await new Promise((res) => setTimeout(res, 500));
+            const st = await link.readStates();
+            if (!st) return;
+            ['brakeL', 'brakeR', 'brakeM'].forEach((id) => { if (st[BY_ID[id].out]) link.stuck.add(id); else link.stuck.delete(id); });
         }
 
         /* ---------- pages ---------- */
@@ -173,6 +216,7 @@ mgu.run({
             }
             restore();
             await link.stop();
+            await verifyBack();
             back.running = false;
             back.done = ok + ' given back, ' + refused + ' refused' + (link.releaseTried.length ? ' (' + Array.from(new Set(link.releaseTried.map((x) => x.id + ' ' + x.why))).slice(0, 4).join(', ') + ')' : '');
             log.info('light show: give lamps back: ' + back.done);
@@ -236,7 +280,7 @@ mgu.run({
             } else {
                 G.panel(cv, t, 24, 44, 1040, 468, 'Lamp check');
                 const cur = check.at >= 0 ? LAMPS[check.at] : null;
-                cv.text(check.running ? (cur ? cur.name : 'Starting...') : 'Each lamp on for a moment, in turn', 56, 130, 40, t.text, { font: 'bold', literal: true });
+                cv.text(check.running ? (check.step || (cur ? cur.name : 'Starting...')) : 'Each lamp on for a moment, in turn', 56, 130, check.step ? 32 : 40, t.text, { font: 'bold', literal: true });
                 cv.text(check.running ? (check.at + 1) + ' of ' + LAMPS.length + '   ·   Start / stop button: stop the check'
                     : 'Start / stop button: run it (about ' + Math.round(LAMPS.length * (CHECK_ON_MS + CHECK_GAP_MS) / 1000) + ' s). Watch or film the car: the order is the list below.', 56, 170, 20, t.dim, { literal: true });
                 // the list in three columns: tick (took it), cross (refused, why), dot (not checked)
@@ -249,13 +293,22 @@ mgu.run({
                     else cv.roundRect(x, y - 14, 18, 16, 4, mc);
                     cv.text((i + 1) + '. ' + l.name, x + 26, y, 17, now ? t.text : t.dim, { literal: true });
                     if (c && !c.ok) cv.text(c.why, x + 26, y + 15, 12, t.warn, { literal: true });
-                    else if (c && c.ok) cv.text((c.how === 'flm' ? 'headlight module' : 'own output') + (c.back && c.back !== 'ok' ? '  ·  not given back: ' + c.back : ''), x + 26, y + 15, 12, c.back && c.back !== 'ok' ? t.warn : t.dim, { literal: true });
+                    else if (c && c.ok) {
+                        const gaveOk = !c.back || c.back === 'ok' || c.back === 'by itself';
+                        const readTxt = c.read === 1 ? '  ·  read on' : c.read === 0 ? '  ·  read OFF' : '';
+                        cv.text((c.how === 'flm' ? 'headlight module' : 'own output') + readTxt + (gaveOk ? (c.back === 'by itself' ? '  ·  back by itself' : '') : '  ·  not given back: ' + c.back),
+                            x + 26, y + 15, 12, gaveOk && c.read !== 0 ? t.dim : t.warn, { literal: true });
+                    }
                 });
                 // the output layouts the body controller was offered, and what it said to each
                 const pr = check.running && link.probed ? link.probed : checked._probed;
                 const prLine = pr ? 'Output request: ' + pr.map((x) => x.id + ' ' + x.why).join('  ·  ') + (checked._layout || (check.running && link.layout) ? '' : '  -  none taken') : '';
-                cv.text(prLine, 56, 482, 14, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
-                cv.text(linkLine, 56, 502, 14, t.dim, { literal: true });
+                const tm = check.running ? link.timer : checked._timer, tt = check.running ? link.timerTried : checked._timerTried;
+                const tmLine = tt ? 'Time byte: ' + tt.join(', ') + (tm ? '  -  ' + tm.unitMs + ' ms a step: lamps go back by themselves' : '  -  not a time') : '';
+                const hb = checked._highTries ? '   ·   High beam tries: ' + checked._highTries.join(', ') : '';
+                cv.text(prLine, 56, 470, 13, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
+                cv.text(tmLine + hb, 56, 488, 13, tm ? GO : t.dim, { literal: true });
+                cv.text(linkLine, 56, 505, 13, t.dim, { literal: true });
                 G.panel(cv, t, 1088, 44, 488, 468, 'Now on');
                 car(cv, t, 1332, 104, 250, 380, lit, cur && cur.id);
             }
@@ -263,7 +316,7 @@ mgu.run({
             if (link.stuck.size || back.running || back.done) {
                 const stuck = Array.from(link.stuck).map((id) => BY_ID[id].name);
                 const msg = back.running ? 'Giving every lamp back to the car...'
-                    : stuck.length ? 'NOT GIVEN BACK: ' + stuck.join(', ') + '. Press Give lamps back; if they stay on, switch the car off and on.'
+                    : stuck.length ? 'ON / NOT GIVEN BACK: ' + stuck.join(', ') + ' (brake pedal not pressed). Press Give lamps back; if they stay on, switch the car off and on.'
                         : 'Give lamps back: ' + back.done;
                 cv.roundRect(24, 44, 1552, 34, 6, stuck.length ? withAlpha(RED, 0.9) : withAlpha(t.panel || '#202634', 0.95));
                 cv.text(msg, 40, 67, 18, '#ffffff', { font: 'bold', literal: true });
@@ -271,7 +324,12 @@ mgu.run({
             G.frame(cv, t, PAGES, page, []);
             return ui.image('MAIN_GFX', cv);
         }
-        ctx.loop('MAIN', 8, render);
+        // while this page is shown and nothing runs: the brake lights read every 3 s (a stuck one shows in red)
+        let drawnT = 0;
+        setInterval(() => {
+            if (Date.now() - drawnT < 2000 && !player.running && !check.running && !back.running && link.layout && !link.active) verifyBack().catch(() => null);
+        }, 3000);
+        ctx.loop('MAIN', 8, () => { drawnT = Date.now(); return render(); });
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));
         process.on('exit', () => { if (player.running || check.running) log.warn('light show: closing while running: the body controller gives the lamps back in a few seconds'); });
         return { player, link, check, back, stop, start, runCheck, giveAllBack, pages: () => page };

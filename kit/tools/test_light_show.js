@@ -25,7 +25,12 @@ function check(name, fn) { try { fn(); passed++; console.log('ok   ' + name); } 
    output layout (bdc.layout, the id from lamps.js LAYOUTS; null: none): a request of another length is "wrong length",
    of the same length "out of range" - as the G05 answered the first two */
 const sent = [];
-const bdc = { refuseOut: new Set(), noRelease: false, session: 0x01, layout: '03 E A 00', flm: true };
+const bdc = { refuseOut: new Set(), noRelease: false, releaseNrc: 0x31, session: 0x01, layout: '03 E A 00', flm: true,
+    timerUnit: null,                      // ms a step of the layout's last byte (null: not a time, like 00 so far)
+    carOn: new Set(), state: {}, timers: {} };
+const simST = setTimeout;                 // (the simulation's own clock: the test speeds up the app's long waits)
+const carState = (out) => (bdc.carOn.has(out) ? 1 : 0);
+const stateOf = (out) => (out in bdc.state ? bdc.state[out] : carState(out));
 let L;
 function answer(target, sid, data) {
     const d = data;
@@ -40,17 +45,28 @@ function answer(target, sid, data) {
     if (sid === 0x10) { bdc.session = d[0]; return [0x50, d[0], 0x00, 0x32, 0x01, 0xF4]; }
     if (sid === 0x3E) return [0x7E, 0x00];
     if (sid === 0x2F) {
-        if (d[2] === 0x00 && (d.length === 4 || d.length === 3)) return bdc.noRelease ? [0x7F, 0x2F, 0x31] : bdc.session === 0x03 ? [0x6F].concat(d) : [0x7F, 0x2F, 0x7F];
+        if (d[2] === 0x00 && (d.length === 4 || d.length === 3)) {
+            if (bdc.noRelease) return [0x7F, 0x2F, bdc.releaseNrc];
+            if (bdc.session !== 0x03) return [0x7F, 0x2F, 0x7F];
+            if (d.length === 4) delete bdc.state[d[3]]; else bdc.state = {};
+            return [0x6F].concat(d);
+        }
         const lay = bdc.layout && L.LAYOUT[bdc.layout];
         if (!lay) return [0x7F, 0x2F, d.length === 4 ? 0x31 : 0x13];
         if (d.length - 2 !== lay.b.length) return [0x7F, 0x2F, 0x13];
         const body = d.slice(2), out = body[lay.b.indexOf('E')], act = body[lay.b.indexOf('A')];
-        const fits = lay.b.every((x, i) => (x === 'E' || x === 'A' ? true : body[i] === x)) && L.LAMPS.some((l) => l.out === out) && (act === 0 || act === 1 || lay.b.indexOf('A') < 0);
-        if (!fits) return [0x7F, 0x2F, 0x31];
+        const fits = lay.b.every((x, i) => (x === 'E' || x === 'A' || x === 'T' ? true : body[i] === x)) && L.LAMPS.some((l) => l.out === out) && (act === 0 || act === 1 || lay.b.indexOf('A') < 0);
+        if (!fits) return [0x7F, 0x2F, body[0] === 0x00 && bdc.noRelease ? bdc.releaseNrc : 0x31];
         if (bdc.refuseOut.has(out)) return [0x7F, 0x2F, 0x31];
         if (bdc.session !== 0x03) return [0x7F, 0x2F, 0x7F];
+        if (lay.b.indexOf('A') >= 0 && act === 0x40) return [0x7F, 0x2F, bdc.noRelease ? bdc.releaseNrc : 0x31];
+        bdc.state[out] = act;
+        const t = lay.b.indexOf('T') >= 0 ? body[lay.b.indexOf('T')] : 0;
+        clearTimeout(bdc.timers[out]);
+        if (bdc.timerUnit && t) bdc.timers[out] = simST(() => { delete bdc.state[out]; }, t * bdc.timerUnit);
         return [0x6F].concat(d);
     }
+    if (sid === 0x22 && d[0] === 0xE3 && d[1] === 0xB9) { const st = []; for (let i = 0; i < 0x45; i++) st.push(stateOf(i)); return [0x62, 0xE3, 0xB9].concat(st); }
     if (sid === 0x2E) return [0x6E, d[0], d[1]];
     return [0x7F, sid, 0x11];
 }
@@ -122,6 +138,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     };
     require(path.join(APP, 'main.js'));
     const app = await stubs.app.start(ctx);
+    app.link.opts.timerWindowMs = 700;
     await loops.MAIN(); await clicks.BTN_PAGE(); await loops.MAIN(); await clicks.BTN_PAGE();
     check('both pages draw without errors', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 
@@ -133,7 +150,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if (app.pages() !== 1) await clicks.BTN_PAGE();
         await clicks.BTN_RUN();
         await new Promise((r) => realST(r, 5));
-        for (let i = 0; i < 400 && app.check.running; i++) await new Promise((r) => realST(r, 5));
+        for (let i = 0; i < 2000 && app.check.running; i++) await new Promise((r) => realST(r, 5));
         slow();
         await clicks.BTN_PAGE();
         return JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
@@ -193,9 +210,46 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const gb = sent.map((x) => hexs(x.slice(1)));
     check('Give lamps back: every output given back, stuck marks cleared, session ended', () => {
         assert(app.link.stuck.size === 0 && /24 given back, 0 refused/.test(app.back.done), app.back.done);
-        assert(gb[0] === '10 03' && gb[gb.length - 1] === '10 01' && gb.includes('2F E3 B5 00 18'), gb.join(' | '));
+        const nr = gb.filter((x) => x !== '22 E3 B9');
+        assert(nr[0] === '10 03' && nr[nr.length - 1] === '10 01' && gb.includes('2F E3 B5 00 18') && gb[gb.length - 1] === '22 E3 B9', gb.join(' | '));
     });
     await loops.MAIN();
+
+    // the G05 as seen: every give-back form "conditions not correct", and the time byte not a time: the brake
+    // lights read on after the check -> stuck (red bar), whatever the replies said
+    bdc.noRelease = true; bdc.releaseNrc = 0x22; bdc.state = {};
+    saved = await lampCheck();
+    check('give-back refused, no time byte: the brake lights read on afterwards are flagged stuck', () => {
+        assert(saved._timer === null && /still on/.test(saved._timerTried.join(' ')), JSON.stringify(saved._timerTried));
+        assert(app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM') && saved.brakeL.read === 1, JSON.stringify(saved.brakeL));
+        assert(saved._highTries.length === 4, 'four high beam tries');
+    });
+    bdc.noRelease = false; bdc.releaseNrc = 0x31; bdc.state = {}; app.link.stuck.clear();
+
+    // the time byte a time (here 30 ms a step): found by the check, the lamps go back by themselves, nothing stuck
+    bdc.timerUnit = 30;
+    saved = await lampCheck();
+    check('the time byte found to be a time: unit measured, every lamp back by itself', () => {
+        assert(saved._timer && saved._timer.unitMs === 10 || saved._timer.unitMs === 100, JSON.stringify(saved._timer) + ' ' + saved._timerTried);
+        assert(saved.brakeL.back === 'by itself' && app.link.stuck.size === 0, JSON.stringify(saved.brakeL));
+    });
+    bdc.noRelease = true; bdc.releaseNrc = 0x22;            // (and the give-back request refused, as on the G05)
+    bdc.carOn = new Set([0x14, 0x15, 0x0B]);               // tail lights and the left fog on before the show
+    await sleep(1000);                                     // (the check's last timed outputs run out)
+    S.pattern = 'chase';
+    const show = await run(900);
+    check('a light show starts dark: lamps on before it (tail, fog) held off, timed; the brake lights never touched', () => {
+        assert(show.some((x) => /^2F E3 B5 03 14 00 [0-9A-F]{2}$/.test(x) && !/ 00$/.test(x)) && show.some((x) => /^2F E3 B5 03 15 00 /.test(x)), show.join(' | '));
+        assert(!show.some((x) => /^2F E3 B5 (03 )?(18|19|23) /.test(x)), 'no brake light');
+        assert(!show.some((x) => /^2F E3 B5 00 /.test(x)), 'no give-back request needed');
+    });
+    S.pattern = 'wigwag'; bdc.carOn = new Set();
+    const ww = await run(900);
+    check('timed wig-wag: each flash ended with a short timed off, no give-back request', () => {
+        assert(ww.some((x) => /^2F E3 B5 03 07 01 [0-9A-F]{2}$/.test(x)) && ww.some((x) => /^2F E3 B5 03 07 00 [0-9A-F]{2}$/.test(x)), ww.join(' | '));
+        assert(!ww.some((x) => /^2F E3 B5 00 /.test(x)));
+    });
+    bdc.timerUnit = null; bdc.noRelease = false; bdc.releaseNrc = 0x31; app.link.timer = null;
 
     // only while parked
     S.parkedOnly = true;

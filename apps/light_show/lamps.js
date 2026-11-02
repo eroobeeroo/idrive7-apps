@@ -59,7 +59,11 @@ const LAMPS = [
 ];
 const BY_ID = {};
 LAMPS.forEach((l) => { BY_ID[l.id] = l; });
-const LVS = [HIGH, LOW, DRL, BLINK];
+// high beam alternatives the lamp check tries in the left headlight (A-D on its page: which lit is told back by the
+// driver): Fernlichtblinken, Fernlicht Modus 1a / 2a / 3a
+const HIGH_TRIES = [0x45, 0x0F, 0x11, 0x13];
+const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES);
+const STATE_DID = [0xE3, 0xB9];           // LICHT_AUSGANG_DIGITAL: one byte an output (its number), 1 on
 
 /** Lamp functions (TAB_LEUCHTEN_FUNKTION_ARG) for 0xD542. */
 const FN = { lowL: 0x03, lowR: 0x03, highL: 0x05, highR: 0x05, drlL: 0x04, drlR: 0x04, fogL: 0x08, fogR: 0x08,
@@ -70,7 +74,7 @@ const FN = { lowL: 0x03, lowR: 0x03, highL: 0x05, highR: 0x05, drlL: 0x04, drlR:
 const LAYOUTS = [
     { id: 'E A', b: ['E', 'A'] },
     { id: '03 E A', b: [0x03, 'E', 'A'] },
-    { id: '03 E A 00', b: [0x03, 'E', 'A', 0x00] },
+    { id: '03 E A 00', b: [0x03, 'E', 'A', 'T'] },           // (T: 00 so far; the lamp check measures whether it's a time)
     { id: '03 00 E A', b: [0x03, 0x00, 'E', 'A'] },
     { id: '03 E A FF', b: [0x03, 'E', 'A', 0xFF] },
     { id: '03 E A 00 00', b: [0x03, 'E', 'A', 0x00, 0x00] },
@@ -85,9 +89,10 @@ const NRC = { 0x10: 'refused', 0x11: 'not supported', 0x12: 'not supported', 0x1
 const hex = (n) => n.toString(16).toUpperCase().padStart(2, '0');
 const why = (r) => (r.ok ? 'ok' : r.nrc !== null ? NRC[r.nrc] || 'NRC ' + hex(r.nrc) : 'no answer');
 
-const fill = (lay, l, a) => lay.b.map((x) => (x === 'E' ? l.out : x === 'A' ? a : x));
+const fill = (lay, l, a, t) => lay.b.map((x) => (x === 'E' ? l.out : x === 'A' ? a : x === 'T' ? (t || 0) : x));
 const req = {
-    out: (l, lay, on) => [0x2F].concat(OUT_DID, fill(lay, l, on ? 1 : 0)),
+    out: (l, lay, on, t) => [0x2F].concat(OUT_DID, fill(lay, l, on ? 1 : 0, t)),
+    status: () => [0x22].concat(STATE_DID),
     release: (l) => [0x2F].concat(OUT_DID, [0x00, l.out]),
     releaseShort: () => [0x2F].concat(OUT_DID, [0x00]),
     /** the ways to give an output back, tried in turn until one is taken (then kept): the output layout with the
@@ -116,10 +121,18 @@ function check(target, bytes) {
     if (sid === 0x10 && bytes.length === 2 && (a === 0x01 || a === 0x03)) return;
     if (sid === 0x3E && bytes.length === 2 && a === 0x00) return;
     if (target === BDC) {
-        const ok = LAMPS.some((l) => [].concat(...LAYOUTS.map((lay) => [req.out(l, lay, true), req.out(l, lay, false)].concat(req.releases(l, lay).map((x) => x.b))))
-            .some((r) => r.map(hex).join(' ') === key))
-            || Object.values(FN).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7);
-        if (ok) return;
+        if (key === '22 E3 B9') return;
+        const outs = LAMPS.map((l) => l.out);
+        // an output request: a layout's shape (E a lamp output, A on / off / 0x40, T any time byte, the rest as is),
+        // or one with 00 for its control parameter; or return control (00, 00 <output>)
+        const fits = (body, shape) => body.length === shape.length && shape.every((x, i) => (x === 'E' ? outs.indexOf(body[i]) >= 0
+            : x === 'A' ? [0, 1, 0x40].indexOf(body[i]) >= 0 : x === 'T' ? true : body[i] === x));
+        if (sid === 0x2F && bytes[1] === OUT_DID[0] && bytes[2] === OUT_DID[1]) {
+            const body = bytes.slice(3);
+            if (LAYOUTS.some((lay) => fits(body, lay.b) || (lay.b[0] === 0x03 && fits(body, [0x00].concat(lay.b.slice(1)))))) return;
+            if (fits(body, [0x00]) || fits(body, [0x00, 'E'])) return;
+        }
+        if (Object.values(FN).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7)) return;
         throw bad();
     }
     if (sid === 0x2E && bytes.length === 6 && bytes[1] === LV_DID[0] && bytes[2] === LV_DID[1] && bytes[3] === 0x00 && LVS.indexOf(bytes[4]) >= 0 && bytes[5] <= 2) return;
@@ -209,6 +222,53 @@ class LampLink {
         if (!this.layout) this.log.warn('light show: the body controller took no output layout');
         return this.layout;
     }
+    /** the lamp outputs as the body controller has them now: states[output number] 1 on / 0 off, or null */
+    async readStates() {
+        const r = await this.request(BDC, req.status());
+        if (!r.ok || !r.reply || r.reply.length < 10) return null;
+        this.states = r.reply.slice(3); this.statesT = Date.now();
+        return this.states;
+    }
+    /**
+     * Whether the output layout's last byte is a time: the rear fog light on with it set (10, then 1), its state read
+     * every 200 ms; if it goes dark by itself, the time it took gives the unit. this.timer = { unitMs, ms, t } or
+     * null; this.timerTried = what was seen. A timed output goes back by itself: no give-back request needed.
+     */
+    async probeTimer() {
+        this.timer = null; this.timerTried = [];
+        if (!this.layout || this.layout.b.indexOf('T') < 0) { this.timerTried.push('no time byte in the layout'); return null; }
+        const l = BY_ID.rfogL;
+        for (const t of [10, 1]) {
+            const r = await this.request(BDC, req.out(l, this.layout, true, t));
+            if (!r.ok) { this.timerTried.push('T=' + t + ': ' + why(r)); continue; }
+            const t0 = Date.now();
+            let was = false, gone = null;
+            const win = this.opts.timerWindowMs || 3500;
+            while (Date.now() - t0 < win) {
+                await new Promise((res) => setTimeout(res, 200));
+                const st = await this.readStates();
+                if (!st) { this.timerTried.push('T=' + t + ': status not read'); break; }
+                if (st[l.out]) was = true;
+                else if (was) { gone = Date.now() - t0; break; }
+            }
+            this.timerTried.push('T=' + t + ': ' + (gone !== null ? 'dark after ' + gone + ' ms' : was ? 'still on after ' + (win / 1000) + ' s' : 'never read on'));
+            if (gone !== null) {
+                // the unit from the time: 10 ms, 100 ms or 1 s a step
+                const unit = gone / t;
+                this.timer = { unitMs: unit < 40 ? 10 : unit < 400 ? 100 : 1000, ms: gone, t };
+                break;
+            }
+            await this.request(BDC, req.out(l, this.layout, false, 0));
+            await this.release('rfogL');
+        }
+        this.log.info('light show: output time byte: ' + this.timerTried.join(', ') + (this.timer ? ' -> ' + this.timer.unitMs + ' ms a step' : ''));
+        return this.timer;
+    }
+    /** the time byte for ms (with a margin for the next frame's request), when the layout's last byte is a time */
+    _t(ms) {
+        if (!this.timer) return 0;
+        return Math.max(1, Math.min(255, Math.ceil(((ms || 1000) + 250) / this.timer.unitMs)));
+    }
     /** on = true / false; off as 'release' (the car's own again) or 'off' (held dark). ms: how long the frame is
      *  (a headlight module's function is set for whole seconds: 1, or 2 for a long frame). */
     async set(id, on, offAs, ms) {
@@ -222,10 +282,13 @@ class LampLink {
         }
         if (!this.layout) return { ok: false, nrc: null, ms: 0, why: 'no output layout' };
         if (on || offAs === 'off') {
-            const r = await this.request(BDC, req.out(l, this.layout, on));
-            if (r.ok) this.held.add(id);
+            const r = await this.request(BDC, req.out(l, this.layout, on, this._t(ms)));
+            if (r.ok && !this.timer) this.held.add(id);        // (timed: it goes back by itself)
             return r;
         }
+        // timed: dark for a moment, then it goes back to the car by itself (no give-back request; and the flash
+        // ends now, not when its own time runs out)
+        if (this.timer) { const r = await this.request(BDC, req.out(l, this.layout, false, this._t(0))); r.timed = true; return r; }
         return this.release(id);
     }
     async release(id) {
@@ -258,6 +321,8 @@ class LampLink {
         if (l.usual) this.stuck.add(id);
         return r;
     }
+    /** one headlight module's light function for s seconds (0: off): the lamp check's high beam tries */
+    async lvTry(ecu, lv, s) { await this.enter(ecu); return this.request(ecu, req.lv(lv, s)); }
     /** a body controller lamp function for ms (both sides, except the turn signals), then the car's own again */
     fn(id, ms) { return FN[id] ? this.request(BDC, req.fn(FN[id], ms)) : Promise.resolve({ ok: false, nrc: null, ms: 0 }); }
     /** every lamp back to the car, then the default sessions (which give back anything left) */
@@ -274,4 +339,4 @@ class LampLink {
     }
 }
 
-module.exports = { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUTS, LAYOUT, BDC, FLM_L, FLM_R, req, check, hex, why };
+module.exports = { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };

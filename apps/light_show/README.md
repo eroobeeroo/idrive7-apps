@@ -37,6 +37,21 @@ transport.
   brake pedal works as always).
 - **Show** (chase, sweep, everything, blink): any lamp, held dark between flashes. For a parked car.
 
+## What the lamp check measures
+
+- **Output request layout**: `03 <output> <on/off> 00` on the G05 (the line at the bottom of the page).
+- **Time byte**: whether that layout's last byte is an activation time - the rear fog light on with it set to 10, then
+  1, its state read from the body controller (`22 E3 B9`, LICHT_AUSGANG_DIGITAL: a byte an output, by its number)
+  until it goes dark by itself. If it does, every output is sent with a time and goes back to the car by itself:
+  no give-back request (the G05 refuses every form of it: "conditions not correct").
+- **Read on / read OFF** under each lamp: what the body controller says the output is while it should be lit.
+- **High beam tries A-D**: four light functions in the left headlight, 1.5 s each (Fernlichtblinken, high beam modes
+  1a / 2a / 3a): the driver says which lit.
+- Afterwards the brake lights are read: still on (pedal not pressed) = stuck, a red bar on both pages.
+
+A **light show** starts dark: lamps on before it (read from the body controller) are held off while it runs - never
+the brake lights, and tail / plate lights only when outputs are timed. Emergency patterns leave other lamps alone.
+
 ## Safety
 
 - A lamp the car normally keeps on (brake, tail, plate) is never held dark. If the body controller won't take one
