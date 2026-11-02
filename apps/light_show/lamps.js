@@ -48,23 +48,24 @@ const LAMPS = [
     // (the rear turn signals: on a G05 their outputs were taken and nothing lit, like the mirrors')
     { id: 'indRL', out: 0x20, outDark: true, name: 'Turn signal rear left', end: 'rear', side: 'L' },
     { id: 'indRR', out: 0x21, outDark: true, name: 'Turn signal rear right', end: 'rear', side: 'R' },
-    { id: 'tailL', out: 0x14, name: 'Tail light left', end: 'rear', side: 'L', usual: 'on' },
-    { id: 'tailR', out: 0x15, name: 'Tail light right', end: 'rear', side: 'R', usual: 'on' },
     { id: 'rfogL', out: 0x1C, name: 'Rear fog light left', end: 'rear', side: 'L' },
     { id: 'rfogR', out: 0x1D, name: 'Rear fog light right', end: 'rear', side: 'R' },
     { id: 'revL', out: 0x1E, name: 'Reversing light left', end: 'rear', side: 'L' },
     { id: 'revR', out: 0x1F, name: 'Reversing light right', end: 'rear', side: 'R' },
-    { id: 'plate', out: 0x22, name: 'Number plate light', end: 'rear', side: 'M', usual: 'on' },
 ];
-/** The brake lights: never switched (on a G05 they stayed on every time - the body controller won't give them
- *  back). Only read (stuck?) and offered every give-back form by Give lamps back. */
-const BRAKES = [
+/** Lamps never switched: the brake, tail and number plate lights (on a G05 they stayed on every time - the body
+ *  controller won't give them back). Only read (the brake lights: stuck?) and offered every give-back form by Give
+ *  lamps back. */
+const KEPT = [
+    { id: 'tailL', out: 0x14, name: 'Tail light left', end: 'rear', side: 'L', usual: 'on' },
+    { id: 'tailR', out: 0x15, name: 'Tail light right', end: 'rear', side: 'R', usual: 'on' },
+    { id: 'plate', out: 0x22, name: 'Number plate light', end: 'rear', side: 'M', usual: 'on' },
     { id: 'brakeL', out: 0x18, name: 'Brake light left', end: 'rear', side: 'L', usual: 'brake' },
     { id: 'brakeR', out: 0x19, name: 'Brake light right', end: 'rear', side: 'R', usual: 'brake' },
     { id: 'brakeM', out: 0x23, name: 'Third brake light', end: 'rear', side: 'M', usual: 'brake' },
 ];
 const BY_ID = {};
-LAMPS.concat(BRAKES).forEach((l) => { BY_ID[l.id] = l; });
+LAMPS.concat(KEPT).forEach((l) => { BY_ID[l.id] = l; });
 // high beam alternatives the lamp check tries in the left headlight (A-D on its page: which lit is told back by the
 // driver): Fernlichtblinken, Fernlicht Modus 1a / 2a / 3a
 const HIGH_TRIES = [0x45, 0x0F, 0x11, 0x13];
@@ -133,10 +134,10 @@ function check(target, bytes) {
     if (sid === 0x3E && bytes.length === 2 && a === 0x00) return;
     if (target === BDC) {
         if (key === '22 E3 B9') return;
-        const outs = LAMPS.map((l) => l.out), all = outs.concat(BRAKES.map((l) => l.out));
+        const outs = LAMPS.map((l) => l.out), all = outs.concat(KEPT.map((l) => l.out));
         // an output request: a layout's shape (E a lamp output, A on / off / 0x40, T any time byte, the rest as is),
         // or one with 00 for its control parameter; or return control (00, 00 <output>)
-        // (the brake lights: only the give-back forms - 0x40, or control parameter 00 - never on or off)
+        // (the kept lamps - brake, tail, plate: only the give-back forms - 0x40, or control parameter 00 - never on or off)
         const fits = (body, shape, back) => body.length === shape.length && shape.every((x, i) => (x === 'E' ? (back ? all : outs).indexOf(body[i]) >= 0
             : x === 'A' ? (back ? [0, 0x40] : [0, 1, 0x40]).indexOf(body[i]) >= 0 : x === 'T' ? true : body[i] === x));
         if (sid === 0x2F && bytes[1] === OUT_DID[0] && bytes[2] === OUT_DID[1]) {
@@ -171,6 +172,8 @@ class LampLink {
         this.releaseTried = [];           // [{ id, why }] the give-back forms tried
         this.layout = null; this.probed = null;   // the layout taken; the probe's results [{ id, why }]
         this.how = {};
+        this.FLM_L = FLM_L; this.FLM_R = FLM_R;
+        this.modes = new Set();           // headlight flashing modes on ('ecu:lv')
         this.sessions = new Set();        // units in the extended session
         this.stats = { sent: 0, ok: 0, refused: 0, missed: 0, ms: 0, last: null };
         this.queue = Promise.resolve(); this.tp = null; this.lastSent = {};
@@ -297,6 +300,9 @@ class LampLink {
             return r;
         }
         if (!this.layout) return { ok: false, nrc: null, ms: 0, why: 'no output layout' };
+        // a lamp the car keeps on (low beam, daytime light) never by the body controller's output: on a G05 it
+        // won't give one back (only through its headlight module, above)
+        if (l.usual) return { ok: false, nrc: null, ms: 0, why: 'kept' };
         if (on || offAs === 'off') {
             const r = await this.request(BDC, req.out(l, this.layout, on, this._t(ms)), parallel);
             if (r.ok && !this.timer) this.held.add(id);        // (timed: it goes back by itself)
@@ -386,8 +392,15 @@ class LampLink {
     }
     /** a body controller flashing function (BDC_FLASH) for ms */
     flashFn(code, ms) { return this.request(BDC, req.fn(code, ms)); }
-    /** one headlight module's light function for s seconds (0: off): the lamp check's high beam tries */
-    async lvTry(ecu, lv, s) { await this.enter(ecu); return this.request(ecu, req.lv(lv, s)); }
+    /** one headlight module's light function for s seconds (0: off): the lamp check's tries, and the flashing
+     *  modes the patterns run (kept in this.modes until switched off: stop() switches off any left) */
+    async lvTry(ecu, lv, s) {
+        await this.enter(ecu);
+        const r = await this.request(ecu, req.lv(lv, s));
+        const k = ecu + ':' + lv;
+        if (s) this.modes.add(k); else this.modes.delete(k);
+        return r;
+    }
     /** a body controller lamp function for ms (both sides, except the turn signals), then the car's own again */
     fn(id, ms) { return FN[id] ? this.request(BDC, req.fn(FN[id], ms)) : Promise.resolve({ ok: false, nrc: null, ms: 0 }); }
     /** every lamp back to the car, then the default sessions (which give back anything left) */
@@ -395,6 +408,7 @@ class LampLink {
         if (!this.active) return;
         for (const id of Array.from(this.held)) await this.release(id);
         for (const id of Array.from(this.stuck)) await this.release(id);       // once more
+        for (const k of Array.from(this.modes)) { const [e, lv] = k.split(':').map(Number); await this.lvTry(e, lv, 0); }
         clearInterval(this.tp); this.tp = null;
         for (const t of Array.from(this.sessions)) await this.request(t, req.session(0x01));
         this.sessions.clear();
@@ -404,4 +418,4 @@ class LampLink {
     }
 }
 
-module.exports = { LampLink, FLM_FLASH, BDC_FLASH, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };
+module.exports = { LampLink, FLM_FLASH, BDC_FLASH, LAMPS, KEPT, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };

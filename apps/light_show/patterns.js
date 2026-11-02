@@ -9,7 +9,7 @@
  *              brake lights stay the car's own the whole time.
  *   show:      any lamp, held dark between flashes (parked: a light show).
  */
-const { BY_ID } = require('./lamps');
+const { BY_ID, FLM_FLASH, BDC_FLASH } = require('./lamps');
 
 const f = (ms, ...on) => ({ ms, on });
 const PATTERNS = [
@@ -28,11 +28,11 @@ const PATTERNS = [
     { id: 'chase', name: 'Chase', kind: 'show', what: 'Around the car, corner to corner',
         frames: [f(180, 'indFL', 'fogL'), f(180, 'indFR', 'fogR'), f(180, 'indSR', 'indRR'), f(180, 'indRL', 'indSL')] },
     { id: 'sweep', name: 'Sweep', kind: 'show', what: 'Across the front and back, out and back',
-        frames: [f(140, 'indFL', 'rfogL'), f(140, 'fogL', 'revL'), f(140, 'highL', 'plate'), f(140, 'highR', 'plate'),
-            f(140, 'fogR', 'revR'), f(140, 'indFR', 'rfogR'), f(140, 'fogR', 'revR'), f(140, 'highR', 'plate'), f(140, 'highL', 'plate'), f(140, 'fogL', 'revL')] },
+        frames: [f(140, 'indFL', 'rfogL'), f(140, 'fogL', 'revL'), f(140, 'highL'), f(140, 'highR'),
+            f(140, 'fogR', 'revR'), f(140, 'indFR', 'rfogR'), f(140, 'fogR', 'revR'), f(140, 'highR'), f(140, 'highL'), f(140, 'fogL', 'revL')] },
     { id: 'all', name: 'Everything', kind: 'show', what: 'Every lamp on, then every lamp off',
         frames: [f(400, 'lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'fogL', 'fogR', 'indFL', 'indFR', 'indSL', 'indSR', 'indRL', 'indRR',
-            'tailL', 'tailR', 'rfogL', 'rfogR', 'revL', 'revR', 'plate'), f(400)] },
+            'rfogL', 'rfogR', 'revL', 'revR'), f(400)] },
     // burst: each frame's lamps lit by their lamp functions all at once (both sides together), each for the frame's
     // time and then dark by itself - fast, where switching a dozen lamps one by one (~300 ms a request) can't be
     { id: 'strobe', name: 'Strobe', kind: 'show', burst: true, what: 'Reversing, fog, low, high, daytime lights and turn signals, both sides, in quick turn',
@@ -46,8 +46,20 @@ const PATTERNS = [
     { id: 'revsides', name: 'Reverse side to side', kind: 'show', what: 'Reversing lights: two blinks left, two right',
         frames: [f(120, 'revL'), f(100), f(120, 'revL'), f(250), f(120, 'revR'), f(100), f(120, 'revR'), f(250)] },
     { id: 'blink', name: 'Blink', kind: 'show', what: 'Headlights and tail lights dark, then a flash, like a wink',
-        frames: [f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
+        frames: [f(600, 'drlL', 'drlR'), f(150), f(600, 'drlL', 'drlR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
 ];
+/* The car's own flashing modes (found by the lamp check's flash tries on a G05): one request and the unit flashes by
+ * itself - both sides together even when one headlight module is asked (seen on the car), so light shows only - a headlight (L / R: its module) in panic mode or alarm flashing for whole seconds, the reversing lights'
+ * flash for a time. The fast flashing the car allows: its diagnostic link takes ~3 requests a second. Frames: { ms,
+ * act: [['L' | 'R', mode, seconds (0: off)] | ['fn', function, ms]] }, each act one request. */
+const PANIC = FLM_FLASH.panic, ALARM = FLM_FLASH.alarm, REVFLASH = BDC_FLASH.reversing;
+const m = (ms, ...act) => ({ ms, on: [], act });
+PATTERNS.push(
+    { id: 'hstrobe', name: 'Headlight strobe', kind: 'show', modes: true, what: 'Both headlights in their panic flashing, the reversing lights flashing',
+        frames: [m(1800, ['L', PANIC, 2], ['R', PANIC, 2], ['fn', REVFLASH, 2000])] },
+    { id: 'revflash', name: 'Reverse flash', kind: 'show', modes: true, what: 'The reversing lights\' own flashing (both sides)',
+        frames: [m(1800, ['fn', REVFLASH, 2000])] },
+);
 const PATTERN = {};
 PATTERNS.forEach((p) => { PATTERN[p.id] = p; });
 
@@ -98,6 +110,23 @@ class Player {
         let i = 0, t = this.now();
         while (this.running) {
             const p = this.pattern, fr = p.frames[i % p.frames.length];
+            if (p.modes) {
+                // flashing modes: each act one request, the unit flashes by itself
+                const lit = new Set();
+                for (const a of fr.act) {
+                    if (!this.running) break;
+                    if (a[0] === 'fn') { await this.link.flashFn(a[1], a[2] / this.speed); ['revL', 'revR'].forEach((x) => lit.add(x)); }
+                    else { await this.link.lvTry(a[0] === 'L' ? this.link.FLM_L : this.link.FLM_R, a[1], a[2]); if (a[2]) ['lowX', 'highX'].forEach((x) => lit.add(x.replace('X', a[0]))); }
+                }
+                this.lit = lit;
+                if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
+                this.frames++;
+                t += fr.ms / this.speed;
+                const left = t - this.now();
+                if (left > 0) await this.wait(left); else if (left < -1000) { this.late++; t = this.now(); }
+                i++;
+                continue;
+            }
             if (p.burst) {
                 // lamp functions, all at once, dark again by themselves
                 if (fr.on.length) { await this.link.burst(fr.on, fr.ms / this.speed + 40); this.lit = new Set(fr.on.concat(fr.on.filter((id) => id !== 'indFL').map((id) => id.replace(/L$/, 'R')))); }

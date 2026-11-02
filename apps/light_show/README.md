@@ -62,6 +62,20 @@ transport.
 A **light show** starts dark: lamps on before it (read from the body controller) are held off while it runs - never
 the brake lights, and tail / plate lights only when outputs are timed. Emergency patterns leave other lamps alone.
 
+## Network page
+
+The thorough gateway search (`gateway.js` searchGateway): the head unit's interfaces, routes and ARP neighbours on
+its in-car networks (BMW's 160.48.199.x VLANs on a G05), every neighbour and the usual unit addresses of each
+network asked for DoIP identification directly (not broadcast) and tried on the diagnostic TCP ports 13400 (DoIP),
+6801 / 6811 (HSFZ) - connect and close, nothing sent. A gateway that takes connections there would let the app send
+lamp requests in milliseconds, as OBD-port tools do, instead of ~300 ms each through the head unit's transport (which
+takes one request at a time: the speed test saw 7 of 8 turned away as busy when sent without waiting).
+
+## Lamps never switched
+
+Brake, tail and number plate lights (the body controller won't give them back), and the low beams and daytime lights
+by the body controller (only through their headlight module, which gives them back with a 0 s light function).
+
 ## Safety
 
 - A lamp the car normally keeps on (brake, tail, plate) is never held dark. If the body controller won't take one

@@ -2,7 +2,7 @@
   "id": "light_show",
   "title": "Light Show",
   "description": "Flash the exterior lamps in patterns through the body controller's lamp test functions: emergency patterns (wig-wag and more, on lamps that are normally off while driving) and light shows. A lamp check finds which lamps the car lets the app switch.",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "vendor": "custom",
   "loggingId": "OA9F",
   "iconGlyph": "lights",
@@ -107,6 +107,14 @@
         [
           "blink",
           "Blink (show)"
+        ],
+        [
+          "hstrobe",
+          "Headlight strobe (show)"
+        ],
+        [
+          "revflash",
+          "Reverse flash (show)"
         ]
       ]
     },

@@ -17,9 +17,9 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUT, FLM_FLASH, BDC_FLASH, FLM_L, hex, why } = require('./lamps');
+const { LampLink, LAMPS, KEPT, BY_ID, FN, NRC, LAYOUT, FLM_FLASH, BDC_FLASH, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
-const { findGateway } = require('./gateway');
+const { findGateway, searchGateway } = require('./gateway');
 
 const W = 1600, H = 520;
 const AMBER = '#ffad1f', RED = '#ff3030', WHITE = '#f4f7ff', FOG = '#fff2b0', GO = '#2fd27a';
@@ -152,7 +152,7 @@ mgu.run({
                 let r = { ok: false, nrc: null }, how = null;
                 const tried = [];
                 if (l.flm) { link.how[l.id] = 'flm'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('headlight: ' + why(r)); if (r.ok) how = 'flm'; }
-                if (!how && link.layout && !l.outDark) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
+                if (!how && link.layout && !l.outDark && !l.usual) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
                 let fnOk = false;
                 if (!how) { const fr = await link.fn(l.id, CHECK_ON_MS); fnOk = fr.ok; if (FN[l.id]) tried.push('function: ' + why(fr)); }
                 // what the body controller says its output is now (an output it took but didn't switch: read 0)
@@ -208,11 +208,24 @@ mgu.run({
         }
 
         /* ---------- pages ---------- */
-        const PAGES = ['Light Show', 'Lamp check'];
+        const PAGES = ['Light Show', 'Lamp check', 'Network'];
+        /* ---------- the Network page: the car's gateway searched for on the head unit's in-car networks ---------- */
+        const netSearch = { running: false, result: checked._net || null, bcast: checked._gateway || null, t0: 0 };
+        async function runNet() {
+            if (netSearch.running) return;
+            netSearch.running = true; netSearch.t0 = Date.now();
+            try {
+                netSearch.bcast = await findGateway(log, { timeoutMs: 1500 });
+                netSearch.result = await searchGateway(log, { max: 160 });
+                checked._net = netSearch.result; checked._gateway = netSearch.bcast; save();
+            } catch (e) { netSearch.result = { error: String(e.message || e) }; }
+            netSearch.running = false;
+        }
         let page = 0;
         ui.onClick('BTN_PAGE', () => { page = (page + 1) % PAGES.length; return render(); });
         ui.onClick('BTN_RUN', () => {
-            if (page === 1) { if (check.running) check.running = false; else runCheck(); }
+            if (page === 2) runNet();
+            else if (page === 1) { if (check.running) check.running = false; else runCheck(); }
             else if (player.running) stop('stopped'); else start();
             return render();
         });
@@ -227,7 +240,7 @@ mgu.run({
             await link.start();
             link.releaseForm = null; link.releaseTried = [];
             let ok = 0, refused = 0;
-            for (const l of LAMPS.concat(BRAKES)) {
+            for (const l of LAMPS.concat(KEPT)) {
                 link.how[l.id] = 'out';
                 const r = await link.release(l.id);
                 if (r.ok) ok++; else refused++;
@@ -301,6 +314,29 @@ mgu.run({
                 cv.text(runLine, 56, 486, 14, player.error ? t.warn : t.dim, { literal: true });
                 G.panel(cv, t, 1088, 44, 488, 468, 'Lamps now');
                 car(cv, t, 1332, 104, 250, 380, lit, null);
+            } else if (page === 2) {
+                G.panel(cv, t, 24, 44, 1552, 468, 'Network');
+                const r = netSearch.result, b = netSearch.bcast;
+                cv.text(netSearch.running ? 'Searching... ' + Math.round((Date.now() - netSearch.t0) / 1000) + ' s (up to about a minute)'
+                    : 'Start / stop button: search the car network for the gateway (nothing is sent but identification requests)', 56, 120, 22, t.text, { font: 'bold', literal: true });
+                const L = [];
+                if (b) L.push(['Interfaces', (b.interfaces || []).join('   ')]);
+                if (r && r.routes) L.push(['Routes', r.routes.join('   ')]);
+                if (r && r.neighbours) L.push(['Neighbours', r.neighbours.join('   ') || 'none in the ARP table']);
+                if (b) L.push(['Broadcast', b.found.length ? b.found.map((f) => f.proto + ' ' + f.ip + ' ' + f.text).join('; ') : 'no answer' + (b.error ? ' (' + b.error + ')' : '')]);
+                if (r && r.tried !== undefined) {
+                    L.push(['Asked directly', r.tried + ' addresses: ' + (r.answered.length ? r.answered.map((a) => a.ip + ' ' + a.text).join('; ') : 'no DoIP answer')]);
+                    L.push(['Ports open', r.open.length ? r.open.map((o) => o.ip + ':' + o.port).join('   ') : 'none of 13400 / 6801 / 6811 on any of them']);
+                }
+                if (r && r.error) L.push(['Error', r.error]);
+                // long lines wrapped at ~170 characters
+                let y = 170;
+                L.forEach(([k, v]) => {
+                    cv.text(k, 56, y, 17, t.dim, { font: 'bold', literal: true });
+                    const parts = String(v).match(/.{1,170}(\s|$)/g) || [''];
+                    parts.slice(0, 4).forEach((ln) => { cv.text(ln.trim(), 230, y, 15, t.text, { literal: true }); y += 22; });
+                    y += 6;
+                });
             } else {
                 G.panel(cv, t, 24, 44, 1040, 468, 'Lamp check');
                 const cur = check.at >= 0 ? LAMPS[check.at] : null;
@@ -361,6 +397,6 @@ mgu.run({
         ctx.loop('MAIN', 8, () => { drawnT = Date.now(); return render(); });
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));
         process.on('exit', () => { if (player.running || check.running) log.warn('light show: closing while running: the body controller gives the lamps back in a few seconds'); });
-        return { player, link, check, back, stop, start, runCheck, giveAllBack, pages: () => page };
+        return { player, link, check, back, net: netSearch, stop, start, runCheck, giveAllBack, pages: () => page };
     },
 });

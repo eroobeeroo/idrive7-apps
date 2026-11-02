@@ -58,6 +58,94 @@ function ask(port, msg, timeoutMs, proto, found) {
     });
 }
 
+const net = require('net');
+const fs = require('fs');
+
+/** The head unit's neighbours on its in-car networks: the ARP table (units it has talked to), each interface's
+ *  routes and gateways, and the other addresses its own networks hold that answered ARP. -> [{ ip, dev, from }] */
+function neighbours() {
+    const out = [], seen = new Set();
+    const add = (ip, dev, from) => { if (!ip || ip === '0.0.0.0' || seen.has(ip)) return; seen.add(ip); out.push({ ip, dev, from }); };
+    try {
+        fs.readFileSync('/proc/net/arp', 'utf8').split('\n').slice(1).forEach((l) => {
+            const f = l.trim().split(/\s+/);
+            if (f.length >= 6 && f[2] !== '0x0') add(f[0], f[5], 'arp');
+        });
+    } catch (e) { /* not readable */ }
+    try {
+        fs.readFileSync('/proc/net/route', 'utf8').split('\n').slice(1).forEach((l) => {
+            const f = l.trim().split(/\s+/);
+            if (f.length < 3) return;
+            const gw = parseInt(f[2], 16);
+            if (gw) add([gw & 255, (gw >> 8) & 255, (gw >> 16) & 255, gw >>> 24].join('.'), f[0], 'route');
+        });
+    } catch (e) { /* not readable */ }
+    return out;
+}
+/** the routes, for the page: 'dev dest/bits via gw' */
+function routes() {
+    const ip = (h) => { const n = parseInt(h, 16); return [n & 255, (n >> 8) & 255, (n >> 16) & 255, n >>> 24].join('.'); };
+    const bits = (h) => { let n = parseInt(h, 16) >>> 0, c = 0; while (n) { c += n & 1; n >>>= 1; } return c; };
+    try {
+        return fs.readFileSync('/proc/net/route', 'utf8').split('\n').slice(1).map((l) => l.trim().split(/\s+/)).filter((f) => f.length >= 8)
+            .map((f) => f[0] + ' ' + ip(f[1]) + '/' + bits(f[7]) + (parseInt(f[2], 16) ? ' via ' + ip(f[2]) : ''));
+    } catch (e) { return []; }
+}
+/** whether a TCP port accepts a connection (closed again at once, nothing sent) */
+function tcpOpen(ip, port, ms) {
+    return new Promise((resolve) => {
+        const s = net.connect({ host: ip, port });
+        const done = (r) => { clearTimeout(t); s.destroy(); resolve(r); };
+        const t = setTimeout(() => done('timeout'), ms);
+        s.on('connect', () => done('open'));
+        s.on('error', (e) => done(e.code === 'ECONNREFUSED' ? 'refused' : e.code || 'error'));
+    });
+}
+/** the DoIP identification asked of one address (not broadcast) */
+function doipUnicast(ip, ms) {
+    return new Promise((resolve) => {
+        let sock;
+        try { sock = dgram.createSocket('udp4'); } catch (e) { resolve(null); return; }
+        const done = (r) => { clearTimeout(t); try { sock.close(); } catch (e) { /* closed */ } resolve(r); };
+        const t = setTimeout(() => done(null), ms);
+        sock.on('error', () => done(null));
+        sock.on('message', (m) => done(m.length >= 25 && m[2] === 0x00 && m[3] === 0x04 ? 'VIN ' + m.slice(8, 25).toString('latin1') + ', address ' + m.readUInt16BE(25).toString(16) : printable(m).slice(0, 60)));
+        sock.send(DOIP_REQ, 13400, ip, () => {});
+    });
+}
+const PORTS = [13400, 6801, 6811];
+/**
+ * The thorough search: every neighbour (neighbours()) and, on each of the head unit's networks, the usual unit
+ * addresses (.1, .16 and the ones around its own), asked for DoIP identification and tried on the diagnostic TCP
+ * ports (connect, then close: nothing sent). -> { routes, tried, open: [{ ip, port }], answered: [{ ip, text }] }
+ */
+async function searchGateway(log, opts) {
+    opts = opts || {};
+    const list = neighbours();
+    const ifs = os.networkInterfaces();
+    Object.keys(ifs).forEach((n) => (ifs[n] || []).forEach((a) => {
+        if ((a.family !== 'IPv4' && a.family !== 4) || a.internal) return;
+        const p = a.address.split('.').map(Number);
+        const mine = p[3];
+        [1, 2, 10, 16, 17, 32, 64, 100, 128, 254].concat([-2, -1, 1, 2].map((d) => mine + d)).forEach((h) => {
+            if (h > 0 && h < 255 && h !== mine) { const ip = p.slice(0, 3).concat(h).join('.'); if (!list.some((x) => x.ip === ip)) list.push({ ip, dev: n, from: 'guess' }); }
+        });
+    }));
+    const max = opts.max || 80;
+    const tried = list.slice(0, max), open = [], answered = [];
+    // a few at a time
+    for (let i = 0; i < tried.length; i += 8) {
+        await Promise.all(tried.slice(i, i + 8).map(async (x) => {
+            const id = await doipUnicast(x.ip, 400);
+            if (id) answered.push({ ip: x.ip, text: id });
+            for (const port of PORTS) { const r = await tcpOpen(x.ip, port, 400); if (r === 'open') open.push({ ip: x.ip, port }); }
+        }));
+    }
+    const r = { routes: routes(), neighbours: list.filter((x) => x.from !== 'guess').map((x) => x.ip + ' ' + x.dev), tried: tried.length, open, answered };
+    if (log) log.info('light show: gateway search (thorough) ' + JSON.stringify(r));
+    return r;
+}
+
 async function findGateway(log, opts) {
     const timeoutMs = (opts && opts.timeoutMs) || 1500;
     const found = [], errors = [];
@@ -70,4 +158,4 @@ async function findGateway(log, opts) {
     return r;
 }
 
-module.exports = { findGateway, DOIP_REQ, HSFZ_REQ };
+module.exports = { findGateway, searchGateway, neighbours, tcpOpen, DOIP_REQ, HSFZ_REQ };

@@ -146,7 +146,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     require(path.join(APP, 'main.js'));
     const app = await stubs.app.start(ctx);
     app.link.opts.timerWindowMs = 700;
-    await loops.MAIN(); await clicks.BTN_PAGE(); await loops.MAIN(); await clicks.BTN_PAGE();
+    const toPage = async (n) => { for (let i = 0; i < 3 && app.pages() !== n; i++) await clicks.BTN_PAGE(); };
+    await loops.MAIN(); await toPage(1); await loops.MAIN(); await toPage(2); await loops.MAIN(); await toPage(0);
     check('both pages draw without errors', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 
     const realST = global.setTimeout;
@@ -154,12 +155,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const slow = () => { global.setTimeout = realST; };
     async function lampCheck() {
         fast();
-        if (app.pages() !== 1) await clicks.BTN_PAGE();
+        await toPage(1);
         await clicks.BTN_RUN();
         await new Promise((r) => realST(r, 5));
         for (let i = 0; i < 2000 && app.check.running; i++) await new Promise((r) => realST(r, 5));
         slow();
-        await clicks.BTN_PAGE();
+        await toPage(0);
         return JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
     }
     const run = async (ms) => { sent.length = 0; await clicks.BTN_RUN(); await sleep(ms); await clicks.BTN_RUN(); await sleep(50); return sent.map((x) => hexs(x.slice(1))); };
@@ -172,7 +173,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('lamp check: the layouts tried in turn on the left reversing light until one is taken, then kept', () => {
         assert.deepStrictEqual(probe.slice(0, 3), ['2F E3 B5 1E 01', '2F E3 B5 03 1E 01', '2F E3 B5 03 1E 01 00'], probe.join(' | '));
         assert(saved._layout === '03 E A 00' && saved._probed.length === 3 && saved._probed[1].why === 'wrong length' && saved._probed[2].why === 'ok', JSON.stringify(saved._probed));
-        assert(L.LAMPS.filter((l) => !l.outDark).every((l) => saved[l.id].ok && saved[l.id].how === 'out' && saved[l.id].back === 'ok'), 'every lamp by its own output, and given back');
+        assert(L.LAMPS.filter((l) => !l.outDark && !l.usual).every((l) => saved[l.id].ok && saved[l.id].how === 'out' && saved[l.id].back === 'ok'), 'every lamp by its own output, and given back');
+        assert(['lowL', 'lowR', 'drlL', 'drlR'].every((id) => saved[id].ok === false) && !sent.some((x) => x[0] === 0x40 && /^2F E3 B5 03 0[1-4] 01/.test(hexs(x.slice(1)))),
+            'low beams and daytime lights never by the body controller (no headlight module here: left out)');
         assert(saved.indSL.ok === false && saved.indSL.fn === true, 'the mirror repeaters: not by the body controller');
         assert(app.link.releaseForm === '00 E' && app.link.releaseTried[0].id === 'A=40', JSON.stringify(app.link.releaseTried));
     });
@@ -230,9 +233,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // lights read on after the check -> stuck (red bar), whatever the replies said
     bdc.noRelease = true; bdc.releaseNrc = 0x22; bdc.state = {};
     saved = await lampCheck();
-    check('give-back refused, no time byte: found not a time; tail lights not given back, flagged on the page', () => {
+    check('give-back refused, no time byte: found not a time; the fog light not given back (held dark); tail and plate never switched', () => {
         assert(saved._timer === null && /still on/.test(saved._timerTried.join(' ')), JSON.stringify(saved._timerTried));
-        assert(saved.tailL.ok && saved.tailL.back === 'conditions not correct' && app.link.stuck.has('tailL') && !app.link.stuck.has('brakeL'), JSON.stringify(saved.tailL));
+        assert(saved.fogL.ok && saved.fogL.back === 'conditions not correct' && !('tailL' in saved) && !('plate' in saved) && app.link.stuck.size === 0, JSON.stringify(saved.fogL) + ' stuck: ' + Array.from(app.link.stuck));
         assert(!('_blinkTries' in saved), 'no turn signal tries');
     });
     bdc.noRelease = false; bdc.releaseNrc = 0x31; bdc.state = {}; app.link.stuck.clear();
@@ -242,17 +245,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     saved = await lampCheck();
     check('the time byte found to be a time: unit measured, every lamp back by itself', () => {
         assert(saved._timer && saved._timer.unitMs === 10 || saved._timer.unitMs === 100, JSON.stringify(saved._timer) + ' ' + saved._timerTried);
-        assert(saved.tailL.back === 'by itself' && saved.plate.back === 'by itself' && app.link.stuck.size === 0, JSON.stringify(saved.tailL));
+        assert(saved.fogL.back === 'by itself' && saved.revL.back === 'by itself' && app.link.stuck.size === 0, JSON.stringify(saved.fogL) + ' stuck: ' + Array.from(app.link.stuck));
     });
     bdc.noRelease = true; bdc.releaseNrc = 0x22;            // (and the give-back request refused, as on the G05)
-    bdc.carOn = new Set([0x14, 0x15, 0x0B]);               // tail lights and the left fog on before the show
+    bdc.carOn = new Set([0x1E, 0x0B, 0x14]);               // the left reversing and fog lights (and the tail lights) on before the show
     await sleep(300);
     Object.keys(bdc.timers).forEach((k) => clearTimeout(bdc.timers[k])); bdc.state = {};   // (the check's timed outputs: over)
     S.pattern = 'chase';
     const show = await run(900);
-    check('a light show starts dark: lamps on before it (tail, fog) held off, timed; the brake lights never touched', () => {
-        assert(show.some((x) => /^2F E3 B5 03 14 00 [0-9A-F]{2}$/.test(x) && !/ 00$/.test(x)) && show.some((x) => /^2F E3 B5 03 15 00 /.test(x)), show.join(' | '));
-        assert(!show.some((x) => /^2F E3 B5 (03 )?(18|19|23) /.test(x)), 'no brake light');
+    check('a light show starts dark: a lamp on before it (reversing) held off, timed; brake, tail and plate never touched', () => {
+        assert(show.some((x) => /^2F E3 B5 03 1E 00 [0-9A-F]{2}$/.test(x) && !/ 00$/.test(x)), show.join(' | '));
+        assert(!show.some((x) => /^2F E3 B5 (03 )?(18|19|23|14|15|22) /.test(x)), 'no brake, tail or plate light');
         assert(!show.some((x) => /^2F E3 B5 00 /.test(x)), 'no give-back request needed');
     });
     S.pattern = 'strobe';
@@ -290,7 +293,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('no output layout: every layout tried and none kept; front lamps by their headlight module', () => {
         assert(saved._layout === null && saved._probed.length === L.LAYOUTS.length, JSON.stringify(saved._probed));
         ['lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'indFL', 'indFR'].forEach((id) => assert(saved[id].ok && saved[id].how === 'flm', id + ' ' + JSON.stringify(saved[id])));
-        assert(saved.indRL.ok === false && saved.indRL.fn === true && saved.tailL.ok === false, JSON.stringify(saved.indRL));
+        assert(saved.indRL.ok === false && saved.indRL.fn === true && !('tailL' in saved), JSON.stringify(saved.indRL));
         assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 0F 02') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 0F 00'), 'high beam on and off in each module');
     });
     sent.length = 0;
@@ -346,6 +349,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     });
     check('the G05 as answered: every pattern lights lamps', () => Object.keys(g05).forEach((id) => assert(g05[id].lamps > 0 && !g05[id].error, id + ' ' + JSON.stringify(g05[id]))));
     S.pattern = 'wigwag';
+
+    // the Network page: the thorough gateway search (here: this machine's own networks) runs and draws
+    await toPage(2);
+    await clicks.BTN_RUN();
+    for (let i = 0; i < 1200 && app.net.running; i++) await sleep(50);
+    await loops.MAIN();
+    check('Network page: the gateway search runs, keeps its result and draws', () => {
+        assert(!app.net.running && app.net.result && Array.isArray(app.net.result.routes) && typeof app.net.result.tried === 'number', JSON.stringify(app.net.result));
+        assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | '));
+    });
+    await toPage(0);
 
     console.log(passed + ' checks passed');
     process.exit(process.exitCode || 0);
