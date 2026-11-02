@@ -158,4 +158,26 @@ async function findGateway(log, opts) {
     return r;
 }
 
-module.exports = { findGateway, searchGateway, neighbours, tcpOpen, DOIP_REQ, HSFZ_REQ };
+/**
+ * The head unit's Wi-Fi client network (wlan0 - the one it joins a phone's hotspot or a router with; not the
+ * CarPlay bridge), every address of its /24 tried on the diagnostic ports: a gateway behind an ENET cable in a
+ * travel router gets an address there by DHCP. -> [{ ip, port }]
+ */
+async function scanWifi(opts) {
+    opts = opts || {};
+    const ifs = os.networkInterfaces(), out = [];
+    const nets = [];
+    Object.keys(ifs).forEach((n) => { if (/^wlan\d+$/.test(n)) (ifs[n] || []).forEach((a) => { if ((a.family === 'IPv4' || a.family === 4) && !a.internal) nets.push(a.address); }); });
+    for (const me of nets) {
+        const p = me.split('.').map(Number), ips = [];
+        for (let h = 1; h < 255; h++) if (h !== p[3]) ips.push(p.slice(0, 3).concat(h).join('.'));
+        for (let i = 0; i < ips.length; i += 32) {
+            await Promise.all(ips.slice(i, i + 32).map(async (ip) => {
+                for (const port of [6801, 13400]) if (await tcpOpen(ip, port, opts.ms || 300) === 'open') out.push({ ip, port });
+            }));
+        }
+    }
+    return { nets, open: out };
+}
+
+module.exports = { findGateway, searchGateway, scanWifi, neighbours, tcpOpen, DOIP_REQ, HSFZ_REQ };

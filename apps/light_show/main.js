@@ -19,7 +19,8 @@ const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
 const { LampLink, LAMPS, KEPT, BY_ID, FN, NRC, LAYOUT, FLM_FLASH, BDC_FLASH, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
-const { findGateway, searchGateway } = require('./gateway');
+const { findGateway, searchGateway, scanWifi } = require('./gateway');
+const { DirectDiag } = require('./direct');
 
 const W = 1600, H = 520;
 const AMBER = '#ffad1f', RED = '#ff3030', WHITE = '#f4f7ff', FOG = '#fff2b0', GO = '#2fd27a';
@@ -42,6 +43,21 @@ mgu.run({
         diag.quiet = true; diag.busyMs = 60;
         diag.init();
         const link = new LampLink(diag, log);
+        // the car's gateway straight over Wi-Fi (an ENET cable in a travel router the head unit has joined): when it
+        // answers, every lamp request goes that way (milliseconds, not ~300 ms); back to the head unit's own
+        // transport when it goes away
+        const direct = new DirectDiag(log, ctx.directOpts);
+        direct.on('available', (a) => {
+            if (a) { link.diag = direct; log.info('light show: lamps through the direct link (' + direct.proto + ' ' + direct.host + ')'); }
+            else if (link.diag === direct) { link.diag = diag; log.warn('light show: direct link gone: lamps through the head unit again'); }
+        });
+        async function tryDirect(hosts) {
+            for (const h of hosts) {
+                if (direct.available && direct.host === h) return true;
+                if (await direct.connect(h)) { checked._direct = h; save(); return true; }
+            }
+            return false;
+        }
 
         /* ---------- the lamp check's results, kept: { id: { ok, why, t } } ---------- */
         // (lamp-check.json: 0.1.0's lamps.json was made with a request layout the G05 refuses, so it isn't read)
@@ -60,6 +76,9 @@ mgu.run({
             LAMPS.forEach((l) => { link.how[l.id] = checked[l.id] && checked[l.id].how === 'flm' ? 'flm' : 'out'; });
         };
         restore();
+        // the direct link found before: tried at start and every 30 s while it isn't up
+        if (checked._direct) tryDirect([checked._direct]).catch(() => null);
+        setInterval(() => { if (checked._direct && !direct.available && !player.running && !check.running) tryDirect([checked._direct]).catch(() => null); }, 30000);
 
         /* ---------- parked or moving (Vehicle2 speed) ---------- */
         let speed = null;
@@ -217,7 +236,12 @@ mgu.run({
             try {
                 netSearch.bcast = await findGateway(log, { timeoutMs: 1500 });
                 netSearch.result = await searchGateway(log, { max: 160 });
+                netSearch.wifi = await scanWifi();
                 checked._net = netSearch.result; checked._gateway = netSearch.bcast; save();
+                // a gateway found anywhere: connect (HSFZ, then DoIP) and keep it
+                const hosts = Array.from(new Set(netSearch.bcast.found.map((f) => f.ip)
+                    .concat(netSearch.result.open.map((o) => o.ip), netSearch.wifi.open.map((o) => o.ip))));
+                netSearch.direct = hosts.length ? (await tryDirect(hosts) ? 'connected' : 'found ' + hosts.join(', ') + ' but no link: ' + direct.error) : 'no gateway found';
             } catch (e) { netSearch.result = { error: String(e.message || e) }; }
             netSearch.running = false;
         }
@@ -247,6 +271,9 @@ mgu.run({
                 link.releaseForm = null;          // (every form again for the next lamp: one may take what another doesn't)
             }
             restore();
+        // the direct link found before: tried at start and every 30 s while it isn't up
+        if (checked._direct) tryDirect([checked._direct]).catch(() => null);
+        setInterval(() => { if (checked._direct && !direct.available && !player.running && !check.running) tryDirect([checked._direct]).catch(() => null); }, 30000);
             await link.stop();
             await verifyBack();
             back.running = false;
@@ -283,7 +310,8 @@ mgu.run({
             const cv = ctx.canvas(W, H).clear(t.bg);
             const p = pattern();
             const stats = link.stats;
-            const linkLine = 'Body controller: ' + (link.active ? 'session ' + (link.session || '...') : 'idle') + '   ·   '
+            const linkLine = (link.diag === direct ? 'DIRECT ' + direct.proto.toUpperCase() + ' ' + direct.host + '   ·   ' : '')
+                + 'Body controller: ' + (link.active ? 'session ' + (link.session || '...') : 'idle') + '   ·   '
                 + stats.ok + ' ok, ' + stats.refused + ' refused, ' + stats.missed + ' unanswered' + (stats.ms ? '   ·   ' + Math.round(stats.ms) + ' ms a request' : '')
                 + (diag.available ? '' : '   ·   diagnostic link not available');
             // what the player did, for a photo: frames shown, lamps it lit now, the last refusal
@@ -328,6 +356,10 @@ mgu.run({
                     L.push(['Asked directly', r.tried + ' addresses: ' + (r.answered.length ? r.answered.map((a) => a.ip + ' ' + a.text).join('; ') : 'no DoIP answer')]);
                     L.push(['Ports open', r.open.length ? r.open.map((o) => o.ip + ':' + o.port).join('   ') : 'none of 13400 / 6801 / 6811 on any of them']);
                 }
+                if (netSearch.wifi) L.push(['Wi-Fi', (netSearch.wifi.nets.length ? netSearch.wifi.nets.join(', ') + ': ' : 'no Wi-Fi client network  ')
+                    + (netSearch.wifi.open.length ? netSearch.wifi.open.map((o) => o.ip + ':' + o.port).join('   ') : 'no diagnostic port open')]);
+                L.push(['Direct link', direct.available ? direct.proto.toUpperCase() + ' ' + direct.host + (direct.vin ? '  VIN ' + direct.vin : '') + '  -  the lamps go this way'
+                    : (netSearch.direct || 'not connected') + (checked._direct ? '  (last: ' + checked._direct + ')' : '')]);
                 if (r && r.error) L.push(['Error', r.error]);
                 // long lines wrapped at ~170 characters
                 let y = 170;
@@ -397,6 +429,6 @@ mgu.run({
         ctx.loop('MAIN', 8, () => { drawnT = Date.now(); return render(); });
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));
         process.on('exit', () => { if (player.running || check.running) log.warn('light show: closing while running: the body controller gives the lamps back in a few seconds'); });
-        return { player, link, check, back, net: netSearch, stop, start, runCheck, giveAllBack, pages: () => page };
+        return { player, link, check, back, net: netSearch, direct, stop, start, runCheck, giveAllBack, pages: () => page };
     },
 });

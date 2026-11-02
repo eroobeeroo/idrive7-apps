@@ -71,6 +71,16 @@ network asked for DoIP identification directly (not broadcast) and tried on the 
 lamp requests in milliseconds, as OBD-port tools do, instead of ~300 ms each through the head unit's transport (which
 takes one request at a time: the speed test saw 7 of 8 turned away as busy when sent without waiting).
 
+## Direct link (ENET cable + travel router)
+
+`direct.js`: the car's gateway straight over Ethernet, as OBD-port tools reach it - HSFZ (TCP 6801, tester 0xF4)
+or DoIP (TCP 13400, routing activation with tester 0x0EF3 / 0x0E80 / 0x00F4), proven with the gateway's VIN (22 F1 90).
+For a head unit joined to the Wi-Fi of a travel router with an ENET cable in its LAN port (the car's gateway gets an
+address by DHCP there). The Network page's search also tries every address of the head unit's Wi-Fi client network
+(wlan0) on both ports, connects to a gateway it finds and keeps it: from then on every lamp request goes that way
+(milliseconds, not ~300 ms), tried again at start and every 30 s, and back to the head unit's transport whenever the
+link goes. The same requests (`check()` vets them all) either way.
+
 ## Lamps never switched
 
 Brake, tail and number plate lights (the body controller won't give them back), and the low beams and daytime lights

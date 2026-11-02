@@ -34,6 +34,7 @@ const stateOf = (out) => (out in bdc.state ? bdc.state[out] : carState(out));
 let L;
 function answer(target, sid, data) {
     const d = data;
+    if (target === 0x10 && sid === 0x22 && d[0] === 0xF1 && d[1] === 0x90) return [0x62, 0xF1, 0x90].concat(Array.from(Buffer.from('WBA00000000000045')));
     if (target === 0x43 || target === 0x44) {
         if (!bdc.flm) return null;
         if (sid === 0x10) return [0x50, d[0]];
@@ -138,7 +139,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         app: {}, ui: { onClick: (id, fn) => { clicks[id] = fn; }, text() {}, image: async () => {} },
         settings: { get: (k) => S[k], set: (k, v) => { S[k] = v; listeners.forEach((f) => f(k, v)); }, onChange: (f) => listeners.push(f), display: (k) => String(S[k]) },
         log: { info() {}, warn: (m) => warns.push(m), error: (m, e) => warns.push(m + ' ' + e) },
-        spec: SPEC, dataDir: dir,
+        spec: SPEC, dataDir: dir, directOpts: { hsfzPort: 16801, doipPort: 13401, connectTimeoutMs: 500 },
         signals: { watch: (iface, inst, h) => { if (h.statusCarSpeed2) speedCb = h.statusCarSpeed2; return Promise.resolve({}); } },
         onTab() {}, loop: (name, fps, fn) => { loops[name] = fn; },
         theme: () => themes.theme('m_tricolour'), canvas: (w, h) => new Canvas(w, h),
@@ -360,6 +361,72 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | '));
     });
     await toPage(0);
+
+    // the direct link: a simulated gateway on this machine, HSFZ (6801 here 16801) and DoIP (13400 here 13401),
+    // answering like the simulated body controller
+    const netm = require('net');
+    const viaDirect = [];
+    function hsfzServer() {
+        return netm.createServer((c) => {
+            let b = Buffer.alloc(0);
+            c.on('data', (d) => {
+                b = Buffer.concat([b, d]);
+                while (b.length >= 6 && b.length >= 6 + b.readUInt32BE(0)) {
+                    const len = b.readUInt32BE(0), ctl = b.readUInt16BE(4), p = b.slice(6, 6 + len); b = b.slice(6 + len);
+                    if (ctl !== 1) continue;
+                    const src = p[0], tgt = p[1], uds = Array.from(p.slice(2));
+                    viaDirect.push(tgt.toString(16) + ' ' + hexs(uds));
+                    const ack = Buffer.alloc(6); ack.writeUInt32BE(len, 0); ack.writeUInt16BE(2, 4); c.write(Buffer.concat([ack, p]));
+                    const u = answer(tgt, uds[0], uds.slice(1));
+                    if (u) { const r = Buffer.from([tgt, src].concat(u)), h = Buffer.alloc(6); h.writeUInt32BE(r.length, 0); h.writeUInt16BE(1, 4); c.write(Buffer.concat([h, r])); }
+                }
+            });
+        });
+    }
+    function doipServer() {
+        const msg = (type, p) => { const h = Buffer.alloc(8); h[0] = 2; h[1] = 0xFD; h.writeUInt16BE(type, 2); h.writeUInt32BE(p.length, 4); return Buffer.concat([h, p]); };
+        return netm.createServer((c) => {
+            let b = Buffer.alloc(0);
+            c.on('data', (d) => {
+                b = Buffer.concat([b, d]);
+                while (b.length >= 8 && b.length >= 8 + b.readUInt32BE(4)) {
+                    const type = b.readUInt16BE(2), len = b.readUInt32BE(4), p = b.slice(8, 8 + len); b = b.slice(8 + len);
+                    if (type === 5) { const src = p.readUInt16BE(0); c.write(msg(6, Buffer.from([src >> 8, src & 255, 0x10, 0x10, src === 0x0E80 ? 0x10 : 0x06, 0, 0, 0, 0]))); continue; }
+                    if (type !== 0x8001) continue;
+                    const src = p.readUInt16BE(0), tgt = p.readUInt16BE(2), uds = Array.from(p.slice(4));
+                    viaDirect.push(tgt.toString(16) + ' ' + hexs(uds));
+                    c.write(msg(0x8002, Buffer.concat([p.slice(0, 4), Buffer.from([0])])));
+                    const u = answer(tgt, uds[0], uds.slice(1));
+                    if (u) c.write(msg(0x8001, Buffer.from([tgt >> 8, tgt & 255, src >> 8, src & 255].concat(u))));
+                }
+            });
+        });
+    }
+    Object.assign(bdc, { layout: '03 E A 00', noRelease: false, timerUnit: null, flm: true, state: {} });
+    let srv = hsfzServer();
+    await new Promise((r) => srv.listen(16801, '127.0.0.1', r));
+    let ok1 = await app.direct.connect('127.0.0.1');
+    await sleep(50);
+    S.pattern = 'wigwag'; viaDirect.length = 0;
+    let wd = await run(900);
+    check('direct link (HSFZ): connected with the gateway\'s VIN, the lamps go that way and not through the head unit', () => {
+        assert(ok1 && app.direct.proto === 'hsfz' && app.direct.vin === 'WBA00000000000045', app.direct.error);
+        assert(viaDirect.some((x) => /^43 2E D6 DC 00 0F 01/.test(x)) && viaDirect.some((x) => /^40 10 03/.test(x)), viaDirect.join(' | '));
+        assert(!sent.some((x) => x[1] === 0x2E || x[1] === 0x2F), 'nothing through the head unit: ' + wd.join(' | '));
+    });
+    app.direct.close(); srv.close(); await sleep(50);
+    check('direct link gone: back to the head unit\'s transport', () => assert(app.link.diag !== app.direct));
+    srv = doipServer();
+    await new Promise((r) => srv.listen(13401, '127.0.0.1', r));
+    const ok2 = await app.direct.connect('127.0.0.1');
+    await sleep(50);
+    viaDirect.length = 0;
+    wd = await run(900);
+    check('direct link (DoIP): routing activation (the tester address the gateway takes), the lamps that way', () => {
+        assert(ok2 && app.direct.proto === 'doip' && app.direct.tester === 0x0E80, app.direct.error + ' ' + app.direct.tester);
+        assert(viaDirect.some((x) => /^43 2E D6 DC 00 0F 01/.test(x)), viaDirect.join(' | '));
+    });
+    app.direct.close(); srv.close();
 
     console.log(passed + ' checks passed');
     process.exit(process.exitCode || 0);
