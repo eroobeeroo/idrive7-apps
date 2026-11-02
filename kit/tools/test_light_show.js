@@ -140,14 +140,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     const run = async (ms) => { sent.length = 0; await clicks.BTN_RUN(); await sleep(ms); await clicks.BTN_RUN(); await sleep(50); return sent.map((x) => hexs(x.slice(1))); };
 
-    // the lamp check finds the layout the body controller takes, then tries every lamp with it
-    sent.length = 0;
+    // the lamp check finds the layout the body controller takes, then tries every lamp with it (headlight modules
+    // not answering here: the front lamps by their outputs too)
+    bdc.flm = false; sent.length = 0;
     let saved = await lampCheck();
     const probe = sent.map((x) => hexs(x.slice(1))).filter((x) => /^2F E3 B5 (03 (00 )?)?20 01/.test(x));
     check('lamp check: the layouts tried in turn on the rear left turn signal until one is taken, then kept', () => {
         assert.deepStrictEqual(probe.slice(0, 3), ['2F E3 B5 20 01', '2F E3 B5 03 20 01', '2F E3 B5 03 20 01 00'], probe.join(' | '));
         assert(saved._layout === '03 E A 00' && saved._probed.length === 3 && saved._probed[1].why === 'wrong length' && saved._probed[2].why === 'ok', JSON.stringify(saved._probed));
-        assert(L.LAMPS.every((l) => saved[l.id].ok && saved[l.id].how === 'out'), 'every lamp by its own output');
+        assert(L.LAMPS.filter((l) => !l.outDark).every((l) => saved[l.id].ok && saved[l.id].how === 'out' && saved[l.id].back === 'ok'), 'every lamp by its own output, and given back');
+        assert(saved.indSL.ok === false && saved.indSL.fn === true, 'the mirror repeaters: not by the body controller');
+        assert(app.link.releaseForm === '00 E' && app.link.releaseTried[0].id === 'A=40', JSON.stringify(app.link.releaseTried));
     });
     await loops.MAIN();
     check('the check page draws with results', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
@@ -168,11 +171,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     bdc.noRelease = true;
     const held = await run(900);
     check('no single release: high beams held dark between flashes instead, session ended at stop', () => {
-        assert(app.link.noRelease && held.indexOf('2F E3 B5 03 07 00 00') === held.indexOf('2F E3 B5 00 07') + 1, held.join(' | '));
+        const rel = held.indexOf('2F E3 B5 00 07'), off = held.indexOf('2F E3 B5 03 07 00 00');
+        assert(app.link.noRelease && rel > 0 && off > rel && held.slice(rel, off).every((x) => /^2F E3 B5 (00|03 07 40)/.test(x)), held.join(' | '));
         assert(held.indexOf('2F E3 B5 03 07 00 00') < held.indexOf('2F E3 B5 03 08 01 00'), 'dark before the other side lights');
         assert.strictEqual(held[held.length - 1], '10 01');
     });
-    bdc.noRelease = false; app.link.noRelease = false;
+    bdc.noRelease = false; app.link.noRelease = false; app.link.releaseForm = null;
+
+    // a body controller that won't give the brake lights back: never held dark, marked stuck, the page says so;
+    // Give lamps back tries every form on every lamp and the stuck mark goes once one is taken
+    bdc.noRelease = true; sent.length = 0;
+    saved = await lampCheck();
+    check('brake lights not given back in the check: never held dark, marked stuck', () => {
+        assert(saved.brakeL.ok && saved.brakeL.back !== 'ok' && app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM'), JSON.stringify(saved.brakeL));
+        assert(!sent.some((x) => /^2F E3 B5 03 (18|19|23|14|15|22) 00 00$/.test(hexs(x.slice(1)))), 'no normally-on lamp forced off');
+    });
+    await loops.MAIN();
+    bdc.noRelease = false; sent.length = 0;
+    await clicks.BTN_BACK();
+    for (let i = 0; i < 400 && app.back.running; i++) await sleep(5);
+    const gb = sent.map((x) => hexs(x.slice(1)));
+    check('Give lamps back: every output given back, stuck marks cleared, session ended', () => {
+        assert(app.link.stuck.size === 0 && /24 given back, 0 refused/.test(app.back.done), app.back.done);
+        assert(gb[0] === '10 03' && gb[gb.length - 1] === '10 01' && gb.includes('2F E3 B5 00 18'), gb.join(' | '));
+    });
+    await loops.MAIN();
 
     // only while parked
     S.parkedOnly = true;
@@ -188,7 +211,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // a body controller that takes no layout: the front lamps by their headlight module (one a side), the turn
     // signals by their side's own lamp function, the rest left out
-    bdc.layout = null; sent.length = 0;
+    bdc.layout = null; bdc.flm = true; sent.length = 0;
     saved = await lampCheck();
     check('no output layout: every layout tried and none kept; front lamps by their headlight module', () => {
         assert(saved._layout === null && saved._probed.length === L.LAYOUTS.length, JSON.stringify(saved._probed));

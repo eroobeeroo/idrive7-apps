@@ -40,8 +40,10 @@ const LAMPS = [
     { id: 'fogR', out: 0x0C, name: 'Fog light right', end: 'front', side: 'R' },
     { id: 'indFL', out: 0x0D, flm: { ecu: FLM_L, lv: BLINK }, name: 'Turn signal front left', end: 'front', side: 'L' },
     { id: 'indFR', out: 0x0E, flm: { ecu: FLM_R, lv: BLINK }, name: 'Turn signal front right', end: 'front', side: 'R' },
-    { id: 'indSL', out: 0x10, name: 'Side repeater left', end: 'side', side: 'L' },
-    { id: 'indSR', out: 0x11, name: 'Side repeater right', end: 'side', side: 'R' },
+    // (outDark: seen on a G05, the body controller takes the request and nothing lights - the mirrors' repeaters
+    // aren't on its outputs: only the left / right turn signal function reaches them)
+    { id: 'indSL', out: 0x10, outDark: true, name: 'Side repeater left', end: 'side', side: 'L' },
+    { id: 'indSR', out: 0x11, outDark: true, name: 'Side repeater right', end: 'side', side: 'R' },
     { id: 'indRL', out: 0x20, name: 'Turn signal rear left', end: 'rear', side: 'L' },
     { id: 'indRR', out: 0x21, name: 'Turn signal rear right', end: 'rear', side: 'R' },
     { id: 'tailL', out: 0x14, name: 'Tail light left', end: 'rear', side: 'L', usual: 'on' },
@@ -88,6 +90,18 @@ const req = {
     out: (l, lay, on) => [0x2F].concat(OUT_DID, fill(lay, l, on ? 1 : 0)),
     release: (l) => [0x2F].concat(OUT_DID, [0x00, l.out]),
     releaseShort: () => [0x2F].concat(OUT_DID, [0x00]),
+    /** the ways to give an output back, tried in turn until one is taken (then kept): the output layout with the
+     *  action 0x40 (the older body controllers' job, STEUERN_LEUCHTENAUSGANG_DIGITAL: 0 off, 1 on, 0x40 return
+     *  control to the ECU), return control to the ECU with the output, the layout with 00 for its control
+     *  parameter, return control alone */
+    releases: (l, lay) => {
+        const out = [];
+        if (lay && lay.b.indexOf('A') >= 0) out.push({ id: 'A=40', b: [0x2F].concat(OUT_DID, fill(lay, l, 0).map((x, i) => (lay.b[i] === 'A' ? 0x40 : x))) });
+        out.push({ id: '00 E', b: req.release(l) });
+        if (lay && lay.b[0] === 0x03) out.push({ id: '00 ' + lay.id.slice(3), b: [0x2F].concat(OUT_DID, [0x00], fill(lay, l, 0).slice(1)) });
+        out.push({ id: '00', b: req.releaseShort() });
+        return out;
+    },
     lv: (lv, s) => [0x2E].concat(LV_DID, [0x00, lv, s]),
     fn: (fn, ms) => { const t = Math.max(1, Math.min(32700, Math.round(ms / 10))); return [0x2E].concat(FN_DID, [0x00, fn, t >> 8, t & 0xFF]); },
     session: (s) => [0x10, s],
@@ -102,7 +116,7 @@ function check(target, bytes) {
     if (sid === 0x10 && bytes.length === 2 && (a === 0x01 || a === 0x03)) return;
     if (sid === 0x3E && bytes.length === 2 && a === 0x00) return;
     if (target === BDC) {
-        const ok = LAMPS.some((l) => [req.release(l), req.releaseShort()].concat(...LAYOUTS.map((lay) => [req.out(l, lay, true), req.out(l, lay, false)]))
+        const ok = LAMPS.some((l) => [].concat(...LAYOUTS.map((lay) => [req.out(l, lay, true), req.out(l, lay, false)].concat(req.releases(l, lay).map((x) => x.b))))
             .some((r) => r.map(hex).join(' ') === key))
             || Object.values(FN).some((f) => req.fn(f, 10).slice(0, 5).map(hex).join(' ') === bytes.slice(0, 5).map(hex).join(' ') && bytes.length === 7);
         if (ok) return;
@@ -125,7 +139,9 @@ class LampLink {
     constructor(diag, log, opts) {
         this.diag = diag; this.log = log; this.opts = opts || {};
         this.held = new Set();            // lamps taken over and not given back
-        this.active = false; this.session = null; this.releaseForm = 'long'; this.noRelease = false;
+        this.active = false; this.session = null; this.releaseForm = null; this.noRelease = false;
+        this.stuck = new Set();           // lamps the unit wouldn't give back (the page says: cycle the ignition)
+        this.releaseTried = [];           // [{ id, why }] the give-back forms tried
         this.layout = null; this.probed = null;   // the layout taken; the probe's results [{ id, why }]
         this.how = {};
         this.sessions = new Set();        // units in the extended session
@@ -215,18 +231,31 @@ class LampLink {
     async release(id) {
         const l = BY_ID[id];
         if (this.how[id] === 'flm') return this.set(id, false);
-        let r = await this.request(BDC, this.releaseForm === 'short' ? req.releaseShort() : req.release(l));
-        // (some units take the release without the output)
-        if (!r.ok && r.nrc === 0x13 && this.releaseForm === 'long') { this.releaseForm = 'short'; r = await this.request(BDC, req.releaseShort()); }
-        if (r.ok) { if (this.releaseForm === 'short') this.held.clear(); else this.held.delete(id); this.noRelease = false; }
-        else if (r.nrc !== null && !this.noRelease) {
-            // the unit doesn't give single lamps back: from now on lamps that are normally off are held dark
-            // between flashes, and the others left alone (the session's end gives everything back)
-            this.noRelease = true;
-            this.log.warn('light show: ' + l.name + ' not given back (' + why(r) + '): lamps are held dark between flashes');
+        const forms = req.releases(l, this.layout);
+        const list = this.releaseForm ? forms.filter((f) => f.id === this.releaseForm) : forms;
+        let r = { ok: false, nrc: null };
+        for (const f of list) {
+            r = await this.request(BDC, f.b);
+            if (!this.releaseForm) this.releaseTried.push({ id: f.id, why: why(r) });
+            if (r.ok) {
+                if (!this.releaseForm) { this.releaseForm = f.id; this.log.info('light show: outputs given back with ' + f.id); }
+                break;
+            }
+            if (r.nrc === null) break;            // no answer: not a matter of the layout
         }
-        // a lamp that is normally off goes dark now (one the car keeps on stays as it is until the session ends)
-        if (!r.ok && r.nrc !== null && !l.usual && this.layout) { const o = await this.request(BDC, req.out(l, this.layout, false)); if (o.ok) this.held.add(id); }
+        if (r.ok) {
+            if (this.releaseForm === '00') this.held.clear(); else this.held.delete(id);
+            this.stuck.delete(id); this.noRelease = false;
+            return r;
+        }
+        if (r.nrc !== null && !this.noRelease) {
+            this.noRelease = true;
+            this.log.warn('light show: ' + l.name + ' not given back (' + why(r) + ')');
+        }
+        // a lamp that is normally off goes dark now; one the car keeps on (tail, plate, BRAKE) can't be left held:
+        // it's marked stuck, and the page tells the driver to cycle the ignition
+        if (r.nrc !== null && !l.usual && this.layout) { const o = await this.request(BDC, req.out(l, this.layout, false)); if (o.ok) this.held.add(id); }
+        if (l.usual) this.stuck.add(id);
         return r;
     }
     /** a body controller lamp function for ms (both sides, except the turn signals), then the car's own again */
@@ -235,6 +264,7 @@ class LampLink {
     async stop() {
         if (!this.active) return;
         for (const id of Array.from(this.held)) await this.release(id);
+        for (const id of Array.from(this.stuck)) await this.release(id);       // once more
         clearInterval(this.tp); this.tp = null;
         for (const t of Array.from(this.sessions)) await this.request(t, req.session(0x01));
         this.sessions.clear();

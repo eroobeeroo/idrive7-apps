@@ -119,19 +119,23 @@ mgu.run({
             for (let i = 0; i < LAMPS.length && check.running; i++) {
                 const l = LAMPS[i];
                 check.at = i; lit = new Set([l.id]);
-                // 1. its own output (body controller), 2. its headlight module (front lamps), 3. its lamp function
+                // 1. its headlight module (the front lamps: on the G05's LED headlights the body controller takes their
+                // output requests and nothing lights), 2. its own output (body controller), 3. its lamp function
                 let r = { ok: false, nrc: null }, how = null;
                 const tried = [];
-                if (link.layout) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
-                if (!how && l.flm) { link.how[l.id] = 'flm'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('headlight: ' + why(r)); if (r.ok) how = 'flm'; }
+                if (l.flm) { link.how[l.id] = 'flm'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('headlight: ' + why(r)); if (r.ok) how = 'flm'; }
+                if (!how && link.layout && !l.outDark) { link.how[l.id] = 'out'; r = await link.set(l.id, true, null, CHECK_ON_MS); tried.push('output: ' + why(r)); if (r.ok) how = 'out'; }
                 let fnOk = false;
                 if (!how) { const fr = await link.fn(l.id, CHECK_ON_MS); fnOk = fr.ok; if (FN[l.id]) tried.push('function: ' + why(fr)); }
                 await new Promise((res) => setTimeout(res, CHECK_ON_MS));
-                if (how === 'out') await link.set(l.id, false, 'release');
-                if (how === 'flm') await link.set(l.id, false);
+                // back to the car. Refused: a lamp that is normally off is held dark (lamps.js); one the car keeps on
+                // (brake, tail, plate) is never held dark - it's marked stuck and the page says what to do
+                let gave = { ok: true };
+                if (how === 'out') gave = await link.set(l.id, false, 'release');
+                if (how === 'flm') gave = await link.set(l.id, false);
                 link.how[l.id] = how === 'flm' ? 'flm' : 'out';
                 lit = new Set();
-                checked[l.id] = how ? { ok: true, how, t: Date.now(), ms: r.ms }
+                checked[l.id] = how ? { ok: true, how, back: gave.ok ? 'ok' : why(gave), t: Date.now(), ms: r.ms }
                     : { ok: false, fn: fnOk, why: fnOk ? 'function only (both sides)' : tried.join(', ') || 'no way', t: Date.now() };
                 log.info('lamp check: ' + l.name + ': ' + (how ? 'works by its ' + (how === 'flm' ? 'headlight module' : 'output') + ', ' + r.ms + ' ms' : checked[l.id].why) + ' [' + tried.join(', ') + ']');
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
@@ -150,6 +154,30 @@ mgu.run({
             else if (player.running) stop('stopped'); else start();
             return render();
         });
+        /** every lamp the body controller has an output for, given back (also ones held from an earlier run the app
+         *  doesn't know of: brake lights left on), every give-back form tried; then the sessions ended */
+        const back = { running: false, done: null };
+        async function giveAllBack() {
+            if (back.running) return;
+            if (player.running) await stop('giving lamps back');
+            check.running = false;
+            back.running = true; back.done = null;
+            await link.start();
+            link.releaseForm = null; link.releaseTried = [];
+            let ok = 0, refused = 0;
+            for (const l of LAMPS) {
+                link.how[l.id] = 'out';
+                const r = await link.release(l.id);
+                if (r.ok) ok++; else refused++;
+                link.releaseForm = null;          // (every form again for the next lamp: one may take what another doesn't)
+            }
+            restore();
+            await link.stop();
+            back.running = false;
+            back.done = ok + ' given back, ' + refused + ' refused' + (link.releaseTried.length ? ' (' + Array.from(new Set(link.releaseTried.map((x) => x.id + ' ' + x.why))).slice(0, 4).join(', ') + ')' : '');
+            log.info('light show: give lamps back: ' + back.done);
+        }
+        ui.onClick('BTN_BACK', () => { giveAllBack(); return render(); });
         ui.onClick('BTN_PATTERN', () => {
             const i = PATTERNS.indexOf(pattern());
             settings.set('pattern', PATTERNS[(i + 1) % PATTERNS.length].id);
@@ -221,6 +249,7 @@ mgu.run({
                     else cv.roundRect(x, y - 14, 18, 16, 4, mc);
                     cv.text((i + 1) + '. ' + l.name, x + 26, y, 17, now ? t.text : t.dim, { literal: true });
                     if (c && !c.ok) cv.text(c.why, x + 26, y + 15, 12, t.warn, { literal: true });
+                    else if (c && c.ok) cv.text((c.how === 'flm' ? 'headlight module' : 'own output') + (c.back && c.back !== 'ok' ? '  ·  not given back: ' + c.back : ''), x + 26, y + 15, 12, c.back && c.back !== 'ok' ? t.warn : t.dim, { literal: true });
                 });
                 // the output layouts the body controller was offered, and what it said to each
                 const pr = check.running && link.probed ? link.probed : checked._probed;
@@ -230,12 +259,21 @@ mgu.run({
                 G.panel(cv, t, 1088, 44, 488, 468, 'Now on');
                 car(cv, t, 1332, 104, 250, 380, lit, cur && cur.id);
             }
+            // lamps the body controller wouldn't give back (brake / tail / plate): the driver must know
+            if (link.stuck.size || back.running || back.done) {
+                const stuck = Array.from(link.stuck).map((id) => BY_ID[id].name);
+                const msg = back.running ? 'Giving every lamp back to the car...'
+                    : stuck.length ? 'NOT GIVEN BACK: ' + stuck.join(', ') + '. Press Give lamps back; if they stay on, switch the car off and on.'
+                        : 'Give lamps back: ' + back.done;
+                cv.roundRect(24, 44, 1552, 34, 6, stuck.length ? withAlpha(RED, 0.9) : withAlpha(t.panel || '#202634', 0.95));
+                cv.text(msg, 40, 67, 18, '#ffffff', { font: 'bold', literal: true });
+            }
             G.frame(cv, t, PAGES, page, []);
             return ui.image('MAIN_GFX', cv);
         }
         ctx.loop('MAIN', 8, render);
         render().then(() => log.info('first frame done')).catch((e) => log.warn('first render: ' + e));
         process.on('exit', () => { if (player.running || check.running) log.warn('light show: closing while running: the body controller gives the lamps back in a few seconds'); });
-        return { player, link, check, stop, start, runCheck, pages: () => page };
+        return { player, link, check, back, stop, start, runCheck, giveAllBack, pages: () => page };
     },
 });

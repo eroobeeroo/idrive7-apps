@@ -24,8 +24,9 @@ transport.
 
 - **Light Show**: the pattern (Next pattern, or Settings), Start / stop, the lamps lit now.
 - **Lamp check**: first the output layout (the rear left turn signal blinks a few times), then each lamp on for
-  1.2 s in turn (about 50 s, the order is the list on the page): by its own output, else its headlight module, else
-  its lamp function. A lamp that only works through a both-sides function is left out of every pattern (the turn
+  1.2 s in turn (about 50 s, the order is the list on the page): front lamps by their headlight module first (on the
+  G05's LED headlights the body controller takes their output requests and nothing lights), then by the body
+  controller's output, else by the lamp function. Under each lamp: how it works, and whether it was given back. A lamp that only works through a both-sides function is left out of every pattern (the turn
   signals are the exception: left and right are separate functions).
 
 ## Patterns
@@ -37,6 +38,12 @@ transport.
 - **Show** (chase, sweep, everything, blink): any lamp, held dark between flashes. For a parked car.
 
 ## Safety
+
+- A lamp the car normally keeps on (brake, tail, plate) is never held dark. If the body controller won't take one
+  back (a G05 kept its brake lights on after 0.2.0's check: ending the session did not give them back), the app
+  tries every give-back form (`releases()` in lamps.js), and if none is taken it marks the lamp stuck: a red bar on
+  both pages names it. **Give lamps back** (button) tries every form on every output, also for lamps held from an
+  earlier run; if a lamp still stays on, switching the car off and on gives it back.
 
 - Stop gives every lamp back and ends the diagnostic session.
 - If the app goes away without stopping (closed, crashed, head unit restart), the body controller drops back to its
