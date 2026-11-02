@@ -19,6 +19,7 @@ const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
 const { LampLink, LAMPS, BRAKES, BY_ID, FN, NRC, LAYOUT, FLM_FLASH, BDC_FLASH, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
+const { findGateway } = require('./gateway');
 
 const W = 1600, H = 520;
 const AMBER = '#ffad1f', RED = '#ff3030', WHITE = '#f4f7ff', FOG = '#fff2b0', GO = '#2fd27a';
@@ -136,6 +137,13 @@ mgu.run({
             await link.probeTimer();
             lit = new Set(); check.step = null;
             checked._timer = link.timer; checked._timerTried = link.timerTried;
+            // how fast the link can go: one at a time vs sent without waiting (the left reversing light blinks)
+            check.step = 'Speed test (the left reversing light blinks)'; lit = new Set(['revL']);
+            checked._speed = await link.speedTest(8);
+            // whether the car's gateway answers on the car's Ethernet (as it does to tools on the OBD port)
+            check.step = 'Looking for the gateway on the car network'; lit = new Set();
+            try { checked._gateway = await findGateway(log, { timeoutMs: 1500 }); } catch (e) { checked._gateway = { error: String(e.message || e), found: [], interfaces: [] }; }
+            check.step = null;
             for (let i = 0; i < LAMPS.length && check.running; i++) {
                 const l = LAMPS[i];
                 check.at = i; lit = new Set([l.id]);
@@ -322,9 +330,14 @@ mgu.run({
                 const tm = check.running ? link.timer : checked._timer, tt = check.running ? link.timerTried : checked._timerTried;
                 const tmLine = tt ? 'Time byte: ' + tt.join(', ') + (tm ? '  -  ' + tm.unitMs + ' ms a step: lamps go back by themselves' : '  -  not a time') : '';
                 const hb = checked._flashTries ? '   ·   Flash tries: ' + checked._flashTries.join(', ') : '';
-                cv.text(prLine, 56, 470, 13, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
-                cv.text(tmLine + hb, 56, 488, 13, tm ? GO : t.dim, { literal: true });
-                cv.text(linkLine, 56, 505, 13, t.dim, { literal: true });
+                const sp = checked._speed, gw = checked._gateway;
+                const spLine = (sp ? 'Speed: one at a time ' + sp.seqMs + ' ms a request; sent without waiting: ' + sp.pipe.taken + ' of ' + sp.pipe.sent + ' taken, '
+                    + sp.pipe.answered + ' answered, ' + sp.pipe.ms + ' ms each (' + Object.keys(sp.pipe.verdicts).map((k) => k + ' ' + sp.pipe.verdicts[k]).join(', ') + ')' : '')
+                    + (gw ? '   ·   Gateway: ' + (gw.found.length ? gw.found.map((f) => f.proto + ' ' + f.ip + ' ' + f.text).join('; ') : 'none answered') + ' [' + (gw.interfaces || []).join(', ') + ']' + (gw.error ? ' ' + gw.error : '') : '');
+                cv.text(prLine, 56, 462, 12, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
+                cv.text(tmLine + hb, 56, 477, 12, tm ? GO : t.dim, { literal: true });
+                cv.text(spLine, 56, 492, 12, gw && gw.found && gw.found.length ? GO : t.dim, { literal: true });
+                cv.text(linkLine, 56, 507, 12, t.dim, { literal: true });
                 G.panel(cv, t, 1088, 44, 488, 468, 'Now on');
                 car(cv, t, 1332, 104, 250, 380, lit, cur && cur.id);
             }

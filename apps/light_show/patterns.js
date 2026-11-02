@@ -41,6 +41,10 @@ const PATTERNS = [
     // itself - the fastest side to side the car allows (it takes one request at a time, ~300 ms each)
     { id: 'sides', name: 'Side to side', kind: 'show', burst: true, what: 'A whole side\'s turn signals: two flashes left, two right',
         frames: [f(150, 'indFL'), f(60), f(150, 'indFL'), f(200), f(150, 'indFR'), f(60), f(150, 'indFR'), f(200)] },
+    // the reversing lights each by its own output (the body controller splits them; their lamp function lights both):
+    // two blinks a side, then the other side (on and off each a request, ~0.3 s each on a G05)
+    { id: 'revsides', name: 'Reverse side to side', kind: 'show', what: 'Reversing lights: two blinks left, two right',
+        frames: [f(120, 'revL'), f(100), f(120, 'revL'), f(250), f(120, 'revR'), f(100), f(120, 'revR'), f(250)] },
     { id: 'blink', name: 'Blink', kind: 'show', what: 'Headlights and tail lights dark, then a flash, like a wink',
         frames: [f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(600, 'drlL', 'drlR', 'tailL', 'tailR'), f(150), f(120, 'highL', 'highR'), f(120), f(120, 'highL', 'highR'), f(500)] },
 ];

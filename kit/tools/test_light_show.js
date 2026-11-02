@@ -73,6 +73,13 @@ function answer(target, sid, data) {
 class FakeDiag extends EventEmitter {
     constructor() { super(); this.available = true; }
     init() {}
+    // straight to the transport (the speed test's pipelined part): the reply comes as a frame
+    async send(target, sid, data) {
+        sent.push([target, sid].concat(data));
+        const u = answer(target, sid, data);
+        if (u) setImmediate(() => this.emit('frame', { ecu: target, uds: u }));
+        return 'NO_ERROR';
+    }
     async physical(target, sid, data, timeoutMs, accept) {
         sent.push([target, sid].concat(data));
         const u = answer(target, sid, data);
@@ -322,6 +329,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         const fl = sides.filter((x) => /^2E D5 42 00 0[67] /.test(x)).map((x) => x.slice(12, 14));
         assert(fl.slice(0, 4).join() === '06,06,07,07', fl.join(' ') + ' | ' + sides.join(' | '));
         assert(!sides.some((x) => /^2F E3 B5 03 .. 00 /.test(x)), 'nothing to switch off');
+    });
+    S.pattern = 'revsides';
+    const rs = await run(2500);
+    check('reverse side to side: the left reversing light twice by its own output, then the right twice, each switched off between', () => {
+        const ev = rs.filter((x) => /^2F E3 B5 03 (1E|1F) 0[01] /.test(x)).map((x) => x.slice(12, 17));
+        assert.deepStrictEqual(ev.slice(0, 8), ['1E 01', '1E 00', '1E 01', '1E 00', '1F 01', '1F 00', '1F 01', '1F 00'], ev.join(' | '));
+        assert(!rs.some((x) => /^2E D5 42 00 0F /.test(x)), 'not the both-sides function');
+    });
+    check('the check\'s speed test and gateway search: measured and kept', () => {
+        assert(saved._speed && saved._speed.pipe.sent === 8 && saved._speed.pipe.taken === 8 && saved._speed.pipe.answered === 8, JSON.stringify(saved._speed));
+        assert(saved._gateway && Array.isArray(saved._gateway.found) && Array.isArray(saved._gateway.interfaces), JSON.stringify(saved._gateway));
     });
     check('the check\'s flash tries: three headlight flashing modes in the left headlight, two body controller flashing functions', () => {
         assert(saved._flashTries.length === 5, JSON.stringify(saved._flashTries));

@@ -51,6 +51,12 @@ transport.
   alarm flashing and hold-up alarm, the body controller's special flashing and reversing flash. The driver says which
   flashed. (The car takes one request at a time, ~300 ms each - several sent together, only the first is taken - so
   a fast strobe needs a mode that flashes by itself.)
+- **Speed test**: eight on / off requests to the left reversing light one at a time (each waiting for its reply,
+  as the patterns send), then eight sent as soon as the transport took the one before: whether the head unit's
+  diagnostic transport queues requests (then patterns could go several times faster) or turns them away.
+- **Gateway search** (`gateway.js`): the DoIP (13400) and HSFZ (6811) identification broadcasts on the car's
+  Ethernet - whether the head unit can reach the gateway directly, the way OBD-port tools (BimmerLight: ENET / Wi-Fi
+  adapters) do, for requests in milliseconds instead of ~300 ms. Discovery only.
 - Afterwards the brake lights are read: still on (pedal not pressed) = stuck, a red bar on both pages.
 
 A **light show** starts dark: lamps on before it (read from the body controller) are held off while it runs - never

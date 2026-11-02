@@ -347,6 +347,43 @@ class LampLink {
         for (const c of codes) out.push(await this.request(BDC, req.fn(c, ms)));       // (one at a time: see request)
         return out;
     }
+    /**
+     * How fast the link can go (the lamp check's speed test, on the left reversing light):
+     *   seq:  on / off requests one after another, each waiting for its reply (how the patterns send now);
+     *   pipe: the same requests each sent as soon as the transport took the one before (its replies counted as they
+     *         come): whether the head unit's transport queues requests or turns them away.
+     * Returns { seqMs (a request), pipe: { sent, taken, answered, ms, verdicts } }.
+     */
+    async speedTest(n) {
+        n = n || 8;
+        const l = BY_ID[PROBE_LAMP], lay = this.layout;
+        if (!lay) return null;
+        await this.queue;
+        const t0 = Date.now();
+        for (let i = 0; i < n; i++) await this.request(BDC, req.out(l, lay, i % 2 === 0, 0));
+        const seqMs = (Date.now() - t0) / n;
+        // pipelined: straight to the transport, not through the queue (nothing else is sent meanwhile)
+        let answered = 0, taken = 0;
+        const verdicts = {};
+        const onFrame = (f) => { if (f.ecu === BDC && f.uds[0] === 0x6F) answered++; };
+        this.diag.on('frame', onFrame);
+        const t1 = Date.now();
+        for (let i = 0; i < n; i++) {
+            const b = req.out(l, lay, i % 2 === 0, 0);
+            check(BDC, b);
+            let v;
+            try { v = await this.diag.send(BDC, b[0], b.slice(1), { maxRetries: 0, callTimeoutMs: 1500 }); } catch (e) { v = 'error'; }
+            verdicts[v] = (verdicts[v] || 0) + 1;
+            if (/NO_ERROR|PENDING|^0$|^1$/.test(String(v))) taken++;
+        }
+        const sendMs = Date.now() - t1;
+        await new Promise((res) => setTimeout(res, 1500));
+        this.diag.removeListener('frame', onFrame);
+        await this.request(BDC, req.out(l, lay, false, 0));
+        const r = { seqMs: Math.round(seqMs), pipe: { sent: n, taken, answered, ms: Math.round(sendMs / n), verdicts } };
+        this.log.info('light show: speed ' + JSON.stringify(r));
+        return r;
+    }
     /** a body controller flashing function (BDC_FLASH) for ms */
     flashFn(code, ms) { return this.request(BDC, req.fn(code, ms)); }
     /** one headlight module's light function for s seconds (0: off): the lamp check's high beam tries */
