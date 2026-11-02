@@ -281,18 +281,18 @@ class LampLink {
     }
     /** on = true / false; off as 'release' (the car's own again) or 'off' (held dark). ms: how long the frame is
      *  (a headlight module's function is set for whole seconds: 1, or 2 for a long frame). */
-    async set(id, on, offAs, ms) {
+    async set(id, on, offAs, ms, parallel) {
         const l = BY_ID[id];
         if (!l) return { ok: false, nrc: null, ms: 0 };
         if (this.how[id] === 'flm' && l.flm) {
             await this.enter(l.flm.ecu);
-            const r = await this.request(l.flm.ecu, req.lv(l.flm.lv, on ? (ms > 900 ? 2 : 1) : 0));
+            const r = await this.request(l.flm.ecu, req.lv(l.flm.lv, on ? (ms > 900 ? 2 : 1) : 0), parallel);
             if (r.ok) { if (on) this.held.add(id); else this.held.delete(id); }
             return r;
         }
         if (!this.layout) return { ok: false, nrc: null, ms: 0, why: 'no output layout' };
         if (on || offAs === 'off') {
-            const r = await this.request(BDC, req.out(l, this.layout, on, this._t(ms)));
+            const r = await this.request(BDC, req.out(l, this.layout, on, this._t(ms)), parallel);
             if (r.ok && !this.timer) this.held.add(id);        // (timed: it goes back by itself)
             return r;
         }

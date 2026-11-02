@@ -245,6 +245,10 @@ mgu.run({
             const linkLine = 'Body controller: ' + (link.active ? 'session ' + (link.session || '...') : 'idle') + '   ·   '
                 + stats.ok + ' ok, ' + stats.refused + ' refused, ' + stats.missed + ' unanswered' + (stats.ms ? '   ·   ' + Math.round(stats.ms) + ' ms a request' : '')
                 + (diag.available ? '' : '   ·   diagnostic link not available');
+            // what the player did, for a photo: frames shown, lamps it lit now, the last refusal
+            const runLine = 'Frames ' + player.frames + (player.late ? ', link too slow ' + player.late + 'x' : '') + '   ·   lit now: '
+                + (Array.from(lit).map((id) => BY_ID[id] ? BY_ID[id].name : id).join(', ') || 'none')
+                + '   ·   last refused: ' + (stats.last || 'none') + (player.error ? '   ·   ERROR: ' + player.error : '');
             if (page === 0) {
                 G.panel(cv, t, 24, 44, 1040, 468, 'Pattern');
                 cv.text(p.name, 56, 140, 52, t.text, { font: 'bold' });
@@ -265,7 +269,8 @@ mgu.run({
                     stopWhy || player.error || (link.noRelease ? 'This body controller holds lamps dark between flashes (no single release)' : ''),
                     linkLine,
                 ];
-                lines.forEach((s, i) => cv.text(s, 56, 370 + i * 34, 18, i === 2 && (stopWhy || player.error) ? t.warn : t.dim, { literal: true }));
+                lines.forEach((s, i) => cv.text(s, 56, 360 + i * 30, 17, i === 2 && (stopWhy || player.error) ? t.warn : t.dim, { literal: true }));
+                cv.text(runLine, 56, 486, 14, player.error ? t.warn : t.dim, { literal: true });
                 G.panel(cv, t, 1088, 44, 488, 468, 'Lamps now');
                 car(cv, t, 1332, 104, 250, 380, lit, null);
             } else {

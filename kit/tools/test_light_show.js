@@ -304,6 +304,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await loops.MAIN();
     check('pages still draw', () => assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), warns.join(' | ')));
 
+    // the G05 as it answered on the car: the layout 03 E A 00, every give-back "conditions not correct", the time
+    // byte not a time, the headlight modules taking their light functions, rear turn signals not lit by outputs
+    Object.assign(bdc, { layout: '03 E A 00', noRelease: true, releaseNrc: 0x22, timerUnit: null, flm: true, state: {}, carOn: new Set() });
+    app.link.stuck.clear(); app.link.noRelease = false;
+    saved = await lampCheck();
+    const g05 = {};
+    for (const id of P.PATTERNS.map((p) => p.id)) {
+        S.pattern = id;
+        const r = await run(1200);
+        g05[id] = { lamps: r.filter((x) => /^2F E3 B5 03 .. 01|^2E D5 42|^2E D6 DC 00 .. 0[12]/.test(x)).length + sent.filter((x) => (x[0] === 0x43 || x[0] === 0x44) && x[1] === 0x2E && x[7]).length, error: app.player.error, late: app.player.late };
+    }
+    if (process.env.SHOW) console.log(JSON.stringify(g05));
+    S.pattern = 'sides';
+    const sides = await run(1500);
+    check('side to side: each side\'s lamps on together, two flashes, then the other side', () => {
+        const on = sides.filter((x) => /^2F E3 B5 03 (1E|1F|0B|0C) 01 /.test(x)).map((x) => x.slice(12, 14));
+        assert(on.slice(0, 4).join() === '1E,0B,1E,0B' && on.slice(4, 8).join() === '1F,0C,1F,0C', on.join(' '));
+        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 0F 01') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 0F 01'), 'high beams each side');
+    });
+    check('the G05 as answered: every pattern lights lamps', () => Object.keys(g05).forEach((id) => assert(g05[id].lamps > 0 && !g05[id].error, id + ' ' + JSON.stringify(g05[id]))));
+    S.pattern = 'wigwag';
+
     console.log(passed + ' checks passed');
     process.exit(process.exitCode || 0);
 })().catch((e) => { console.error(e); process.exit(1); });
