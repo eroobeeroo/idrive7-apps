@@ -28,7 +28,8 @@ const TP_MS = 2000;                       // tester present (the session ends af
 /** The lamps. out: body controller output; flm: { ecu, lv } its headlight module's light function; side: which
  *  side; usual: what the lamp normally is while driving at night ('on' / 'brake': the emergency patterns never take
  *  it over). */
-const HIGH = 0x45, LOW = 0x05, DRL = 0x33, BLINK = 0x49;     // Fernlichtblinken, Abblendlicht LV5, Tagfahrlicht, Blinken
+// (high beam: Fernlicht Modus 1a - on a G05 Fernlichtblinken 0x45 was taken and nothing lit; 1a, 2a and 3a lit)
+const HIGH = 0x0F, LOW = 0x05, DRL = 0x33, BLINK = 0x49;     // Fernlicht 1a, Abblendlicht LV5, Tagfahrlicht, Blinken
 const LAMPS = [
     { id: 'lowL', out: 0x01, flm: { ecu: FLM_L, lv: LOW }, name: 'Low beam left', end: 'front', side: 'L', usual: 'on' },
     { id: 'lowR', out: 0x02, flm: { ecu: FLM_R, lv: LOW }, name: 'Low beam right', end: 'front', side: 'R', usual: 'on' },
@@ -62,7 +63,10 @@ LAMPS.forEach((l) => { BY_ID[l.id] = l; });
 // high beam alternatives the lamp check tries in the left headlight (A-D on its page: which lit is told back by the
 // driver): Fernlichtblinken, Fernlicht Modus 1a / 2a / 3a
 const HIGH_TRIES = [0x45, 0x0F, 0x11, 0x13];
-const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES);
+// the front left turn signal: on a G05 the left headlight's Blinken (0x49) didn't light while the right one's did -
+// the lamp check tries Blinken and Blinken 2 (0x4A) in the left headlight, A and B: the driver says which lit
+const BLINK_TRIES = [0x49, 0x4A];
+const LVS = [HIGH, LOW, DRL, BLINK].concat(HIGH_TRIES, BLINK_TRIES);
 const STATE_DID = [0xE3, 0xB9];           // LICHT_AUSGANG_DIGITAL: one byte an output (its number), 1 on
 
 /** Lamp functions (TAB_LEUCHTEN_FUNKTION_ARG) for 0xD542. */
@@ -339,4 +343,4 @@ class LampLink {
     }
 }
 
-module.exports = { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };
+module.exports = { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUTS, LAYOUT, HIGH_TRIES, BLINK_TRIES, BDC, FLM_L, FLM_R, req, check, hex, why };

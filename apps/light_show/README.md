@@ -45,8 +45,9 @@ transport.
   until it goes dark by itself. If it does, every output is sent with a time and goes back to the car by itself:
   no give-back request (the G05 refuses every form of it: "conditions not correct").
 - **Read on / read OFF** under each lamp: what the body controller says the output is while it should be lit.
-- **High beam tries A-D**: four light functions in the left headlight, 1.5 s each (Fernlichtblinken, high beam modes
-  1a / 2a / 3a): the driver says which lit.
+- **Front left turn signal tries A-B**: the left headlight's two blink functions, 1.5 s each: the driver says which lit
+  (the high beam tries before it found Fernlicht Modus 1a, which the app now uses: Fernlichtblinken was taken and
+  nothing lit).
 - Afterwards the brake lights are read: still on (pedal not pressed) = stuck, a red bar on both pages.
 
 A **light show** starts dark: lamps on before it (read from the body controller) are held off while it runs - never

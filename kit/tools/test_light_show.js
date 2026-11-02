@@ -112,7 +112,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         assert.strictEqual(hexs(L.req.out(L.BY_ID.highL, L.LAYOUT['03 E A 00'], false)), '2F E3 B5 03 07 00 00');
         assert.strictEqual(hexs(L.req.release(L.BY_ID.highR)), '2F E3 B5 00 08');
         assert.strictEqual(hexs(L.req.fn(0x05, 300)), '2E D5 42 00 05 00 1E');
-        assert.strictEqual(hexs(L.req.lv(0x45, 1)), '2E D6 DC 00 45 01');
+        assert.strictEqual(hexs(L.req.lv(0x0F, 1)), '2E D6 DC 00 0F 01');
         assert(L.BY_ID.highL.flm.ecu === 0x43 && L.BY_ID.highR.flm.ecu === 0x44, 'a headlight module each side');
     });
     check('emergency patterns never take over low beams, daytime, tail, plate or brake lights', () => {
@@ -222,7 +222,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('give-back refused, no time byte: the brake lights read on afterwards are flagged stuck', () => {
         assert(saved._timer === null && /still on/.test(saved._timerTried.join(' ')), JSON.stringify(saved._timerTried));
         assert(app.link.stuck.has('brakeL') && app.link.stuck.has('brakeM') && saved.brakeL.read === 1, JSON.stringify(saved.brakeL));
-        assert(saved._highTries.length === 4, 'four high beam tries');
+        assert(saved._blinkTries.length === 2, 'two front left turn signal tries');
     });
     bdc.noRelease = false; bdc.releaseNrc = 0x31; bdc.state = {}; app.link.stuck.clear();
 
@@ -271,14 +271,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         assert(saved._layout === null && saved._probed.length === L.LAYOUTS.length, JSON.stringify(saved._probed));
         ['lowL', 'lowR', 'highL', 'highR', 'drlL', 'drlR', 'indFL', 'indFR'].forEach((id) => assert(saved[id].ok && saved[id].how === 'flm', id + ' ' + JSON.stringify(saved[id])));
         assert(saved.indRL.ok === false && saved.indRL.fn === true && saved.tailL.ok === false, JSON.stringify(saved.indRL));
-        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 45 02') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 45 00'), 'high beam on and off in each module');
+        assert(sent.some((x) => x[0] === 0x43 && hexs(x.slice(1)) === '2E D6 DC 00 0F 02') && sent.some((x) => x[0] === 0x44 && hexs(x.slice(1)) === '2E D6 DC 00 0F 00'), 'high beam on and off in each module');
     });
     sent.length = 0;
     during = await run(900);
     check('wig-wag by the headlight modules: left module, then right, each one switched off for the other\'s turn', () => {
         const l = sent.filter((x) => x[0] === 0x43).map((x) => hexs(x.slice(1))), r = sent.filter((x) => x[0] === 0x44).map((x) => hexs(x.slice(1)));
-        assert(l[0] === '10 03' && l.indexOf('2E D6 DC 00 45 01') > 0 && l.indexOf('2E D6 DC 00 45 00') > l.indexOf('2E D6 DC 00 45 01'), l.join(' | '));
-        assert(r.indexOf('2E D6 DC 00 45 01') > 0 && r[r.length - 1] === '10 01' && l[l.length - 1] === '10 01', r.join(' | '));
+        assert(l[0] === '10 03' && l.indexOf('2E D6 DC 00 0F 01') > 0 && l.indexOf('2E D6 DC 00 0F 00') > l.indexOf('2E D6 DC 00 0F 01'), l.join(' | '));
+        assert(r.indexOf('2E D6 DC 00 0F 01') > 0 && r[r.length - 1] === '10 01' && l[l.length - 1] === '10 01', r.join(' | '));
         assert(!sent.some((x) => x[0] === 0x40 && x[1] === 0x2F && x.length > 5), 'no body controller output request');
     });
     S.pattern = 'corners';

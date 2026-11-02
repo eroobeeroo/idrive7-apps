@@ -17,7 +17,7 @@ const mgu = require('./kit/mgu');
 const G = require('./kit/gauges');
 const { withAlpha } = require('./kit/canvas');
 const { Diag } = require('./kit/diag');
-const { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUT, HIGH_TRIES, FLM_L, hex, why } = require('./lamps');
+const { LampLink, LAMPS, BY_ID, FN, NRC, LAYOUT, BLINK_TRIES, FLM_L, hex, why } = require('./lamps');
 const { PATTERNS, PATTERN, Player, lampsOf } = require('./patterns');
 
 const W = 1600, H = 520;
@@ -163,13 +163,15 @@ mgu.run({
                 await new Promise((res) => setTimeout(res, CHECK_GAP_MS));
             }
             // the high beams lit by nothing so far: four other functions in the left headlight, A to D, 1.5 s each
-            checked._highTries = [];
-            for (let i = 0; i < HIGH_TRIES.length && check.running; i++) {
-                check.at = -1; check.step = 'High beam left: try ' + 'ABCD'[i] + ' of A-D (which one lit?)'; lit = new Set(['highL']);
-                const r = await link.lvTry(FLM_L, HIGH_TRIES[i], 2);
-                checked._highTries.push('ABCD'[i] + ' ' + hex(HIGH_TRIES[i]) + ' ' + why(r));
+            // the front left turn signal (its headlight's Blinken didn't light on a G05, the right one's did): the
+            // left headlight's two blink functions, A and B, 1.5 s each - the driver says which lit
+            checked._blinkTries = [];
+            for (let i = 0; i < BLINK_TRIES.length && check.running; i++) {
+                check.at = -1; check.step = 'Front left turn signal: try ' + 'AB'[i] + ' of A-B (which one lit?)'; lit = new Set(['indFL']);
+                const r = await link.lvTry(FLM_L, BLINK_TRIES[i], 2);
+                checked._blinkTries.push('AB'[i] + ' ' + hex(BLINK_TRIES[i]) + ' ' + why(r));
                 await new Promise((res) => setTimeout(res, 1500));
-                await link.lvTry(FLM_L, HIGH_TRIES[i], 0);
+                await link.lvTry(FLM_L, BLINK_TRIES[i], 0);
                 lit = new Set();
                 await new Promise((res) => setTimeout(res, 700));
             }
@@ -305,7 +307,7 @@ mgu.run({
                 const prLine = pr ? 'Output request: ' + pr.map((x) => x.id + ' ' + x.why).join('  ·  ') + (checked._layout || (check.running && link.layout) ? '' : '  -  none taken') : '';
                 const tm = check.running ? link.timer : checked._timer, tt = check.running ? link.timerTried : checked._timerTried;
                 const tmLine = tt ? 'Time byte: ' + tt.join(', ') + (tm ? '  -  ' + tm.unitMs + ' ms a step: lamps go back by themselves' : '  -  not a time') : '';
-                const hb = checked._highTries ? '   ·   High beam tries: ' + checked._highTries.join(', ') : '';
+                const hb = checked._blinkTries ? '   ·   Front left turn signal tries: ' + checked._blinkTries.join(', ') : '';
                 cv.text(prLine, 56, 470, 13, (checked._layout || (check.running && link.layout)) ? GO : t.warn, { literal: true });
                 cv.text(tmLine + hb, 56, 488, 13, tm ? GO : t.dim, { literal: true });
                 cv.text(linkLine, 56, 505, 13, t.dim, { literal: true });
