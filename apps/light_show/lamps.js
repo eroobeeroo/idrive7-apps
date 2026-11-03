@@ -313,9 +313,16 @@ class LampLink {
         if (this.timer) { const r = await this.request(BDC, req.out(l, this.layout, false, this._t(0))); r.timed = true; return r; }
         return this.release(id);
     }
-    async release(id) {
+    async release(id, force) {
         const l = BY_ID[id];
         if (this.how[id] === 'flm') return this.set(id, false);
+        // known not to give lamps back (the G05: every form "conditions not correct"): no give-back requests (four
+        // of them a lamp, ~1.2 s); a lamp that is normally off goes dark instead. force (Give lamps back): try anyway
+        if (this.noRelease && !force) {
+            if (!l.usual && this.layout) { const o = await this.request(BDC, req.out(l, this.layout, false, 0)); if (o.ok) this.held.add(id); }
+            if (l.usual) this.stuck.add(id);
+            return { ok: false, nrc: 0x22, ms: 0, skipped: true };
+        }
         const forms = req.releases(l, this.layout);
         const list = this.releaseForm ? forms.filter((f) => f.id === this.releaseForm) : forms;
         let r = { ok: false, nrc: null };

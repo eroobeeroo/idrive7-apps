@@ -73,6 +73,7 @@ mgu.run({
         const restore = () => {
             if (checked._layout && LAYOUT[checked._layout]) link.layout = LAYOUT[checked._layout];
             link.timer = checked._timer || null;
+            link.noRelease = !!checked._noRelease;
             LAMPS.forEach((l) => { link.how[l.id] = checked[l.id] && checked[l.id].how === 'flm' ? 'flm' : 'out'; });
         };
         restore();
@@ -105,7 +106,7 @@ mgu.run({
             if (settings.get('parkedOnly') && moving()) { stopWhy = 'Not started: the car is moving (Only while parked is on)'; return; }
             stopWhy = ''; startedAt = Date.now();
             log.info('light show: ' + pattern().name + ' started');
-            player.start(pattern(), speedK());
+            if (!player.start(pattern(), speedK())) stopWhy = 'Still giving the lamps back from the last run: press Start / stop again in a moment';
         }
         /** A light show starts dark: the lamps that are on now (read from the body controller) are held off while it
          *  runs, so a flash is never a lamp that was on anyway. Only lamps the app can give back: normally-off ones,
@@ -145,7 +146,7 @@ mgu.run({
             check.running = true; check.results = {};
             await link.start();
             // the body controller's output request: the layout it takes (a moment on the rear left turn signal)
-            link.layout = null; link.probed = null;
+            link.layout = null; link.probed = null; link.noRelease = false; link.releaseForm = null;   // (measured afresh)
             check.at = -1; lit = new Set(['indRL']);
             await link.probe();
             lit = new Set();
@@ -212,6 +213,8 @@ mgu.run({
                 await new Promise((res) => setTimeout(res, 800));
             }
             check.step = null;
+            // whether this body controller gives lamps back (kept: no give-back requests while patterns run if not)
+            checked._noRelease = LAMPS.some((l) => checked[l.id] && checked[l.id].how === 'out' && checked[l.id].back && checked[l.id].back !== 'ok' && checked[l.id].back !== 'by itself');
             save();
             await link.stop();
             await verifyBack();
@@ -266,7 +269,7 @@ mgu.run({
             let ok = 0, refused = 0;
             for (const l of LAMPS.concat(KEPT)) {
                 link.how[l.id] = 'out';
-                const r = await link.release(l.id);
+                const r = await link.release(l.id, true);
                 if (r.ok) ok++; else refused++;
                 link.releaseForm = null;          // (every form again for the next lamp: one may take what another doesn't)
             }

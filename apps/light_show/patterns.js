@@ -85,11 +85,13 @@ class Player {
         this.running = false; this.pattern = null; this.lit = new Set(); this.late = 0; this.frames = 0;
         this.stopping = null; this.error = null;
     }
+    /** false while the last run still gives its lamps back (a start then would run two at once) */
     start(pattern, speed) {
-        if (this.running) return;
-        this.pattern = pattern; this.speed = speed || 1; this.running = true; this.error = null; this.frames = 0; this.late = 0;
+        if (this.running || this.ending) return false;
+        this.pattern = pattern; this.speed = speed || 1; this.running = true; this.ending = true; this.error = null; this.frames = 0; this.late = 0;
         this.loop = this._run().catch((e) => { this.error = String(e.message || e); this.opts.log && this.opts.log.warn('light show: ' + this.error); })
-            .then(() => this._end());
+            .then(() => this._end()).then(() => { this.ending = false; }, () => { this.ending = false; });
+        return true;
     }
     /** stop, and give every lamp back */
     stop() {
@@ -107,8 +109,11 @@ class Player {
         const darkSent = new Set();
         this.darkCount = dark.size;
         if (!ok && this.opts.log) this.opts.log.warn('light show: no extended session: trying the lamps anyway');
-        let i = 0, t = this.now();
+        let i = 0;
         while (this.running) {
+            // each frame lasts its time from when it starts, or as long as its requests take when the car is slower:
+            // an even rhythm at whatever pace the link allows (never hurrying later frames to catch up)
+            const f0 = this.now();
             const p = this.pattern, fr = p.frames[i % p.frames.length];
             if (p.modes) {
                 // flashing modes: each act one request, the unit flashes by itself
@@ -121,9 +126,8 @@ class Player {
                 this.lit = lit;
                 if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
                 this.frames++;
-                t += fr.ms / this.speed;
-                const left = t - this.now();
-                if (left > 0) await this.wait(left); else if (left < -1000) { this.late++; t = this.now(); }
+                const left = f0 + fr.ms / this.speed - this.now();
+                if (left > 0) await this.wait(left); else this.late++;
                 i++;
                 continue;
             }
@@ -133,9 +137,8 @@ class Player {
                 else this.lit = new Set();
                 if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
                 this.frames++;
-                t += fr.ms / this.speed;
-                const left = t - this.now();
-                if (left > 0) await this.wait(left); else if (left < -1000) { this.late++; t = this.now(); }
+                const left = f0 + fr.ms / this.speed - this.now();
+                if (left > 0) await this.wait(left); else this.late++;
                 i++;
                 continue;
             }
@@ -157,10 +160,8 @@ class Player {
             }
             if (this.opts.onFrame) this.opts.onFrame(this.lit, i % p.frames.length);
             this.frames++;
-            t += fr.ms / this.speed;
-            const left = t - this.now();
-            if (left > 0) await this.wait(left);
-            else if (left < -1000) { this.late++; t = this.now(); }      // far behind (the link is slow): start over from now
+            const left = f0 + fr.ms / this.speed - this.now();
+            if (left > 0) await this.wait(left); else this.late++;        // (late: frames the link made longer)
             i++;
         }
     }

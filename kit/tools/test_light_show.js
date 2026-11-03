@@ -82,6 +82,7 @@ class FakeDiag extends EventEmitter {
         return 'NO_ERROR';
     }
     async physical(target, sid, data, timeoutMs, accept) {
+        if (bdc.latencyMs) await new Promise((r) => simST(r, bdc.latencyMs));      // (the head unit's transport: ~300 ms a request on a G05)
         sent.push([target, sid].concat(data));
         const u = answer(target, sid, data);
         await new Promise((r) => setImmediate(r));
@@ -164,7 +165,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         await toPage(0);
         return JSON.parse(fs.readFileSync(path.join(dir, 'lamp-check.json'), 'utf8'));
     }
-    const run = async (ms) => { sent.length = 0; await clicks.BTN_RUN(); await sleep(ms); await clicks.BTN_RUN(); await sleep(50); return sent.map((x) => hexs(x.slice(1))); };
+    const run = async (ms) => {
+        sent.length = 0; await clicks.BTN_RUN(); await sleep(ms); await clicks.BTN_RUN();
+        for (let i = 0; i < 400 && app.player.ending; i++) await sleep(25);
+        await sleep(30);
+        return sent.map((x) => hexs(x.slice(1)));
+    };
 
     // the lamp check finds the layout the body controller takes, then tries every lamp with it (headlight modules
     // not answering here: the front lamps by their outputs too)
@@ -327,6 +333,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         g05[id] = { lamps: r.filter((x) => /^2F E3 B5 03 .. 01|^2E D5 42|^2E D6 DC 00 .. 0[12]/.test(x)).length + sent.filter((x) => (x[0] === 0x43 || x[0] === 0x44) && x[1] === 0x2E && x[7]).length, error: app.player.error, late: app.player.late };
     }
     if (process.env.SHOW) console.log(JSON.stringify(g05));
+    // ... and as slow as the car: 300 ms a request. Wig-wag and double flash keep one side at a time, in order, with no
+    // give-back requests (known refused), and stop at once with everything dark
+    bdc.latencyMs = 300;
+    for (const id of ['wigwag', 'double']) {
+        S.pattern = id;
+        const r = await run(5000);
+        const hb = sent.filter((x) => (x[0] === 0x43 || x[0] === 0x44) && x[1] === 0x2E && x[5] === 0x0F).map((x) => (x[0] === 0x43 ? 'L' : 'R') + (x[6] ? '1' : '0'));
+        const lit = new Set(); let both = false;
+        hb.forEach((e) => { if (e[1] === '1') lit.add(e[0]); else lit.delete(e[0]); if (lit.size > 1) both = true; });
+        check(id + ' at 300 ms a request: one high beam at a time, left and right in turn, no give-back requests, all dark at the end', () => {
+            assert(hb.length >= 6 && !both && hb.includes('L1') && hb.includes('R1'), hb.join(' '));
+            assert(!r.some((x) => /^2F E3 B5 00 /.test(x)) && lit.size === 0, r.join(' | '));
+            assert(app.player.frames >= 4, 'frames ' + app.player.frames);
+        });
+    }
+    bdc.latencyMs = 0;
     S.pattern = 'sides';
     const sides = await run(1500);
     check('side to side: a whole side\'s turn signals by its lamp function, two flashes left, two right, one request a flash', () => {
