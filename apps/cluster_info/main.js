@@ -28,12 +28,16 @@ const VALUES = {
     oil: { label: 'OIL', what: 'engine oil temperature' },
     coolant: { label: 'COOL', what: 'coolant temperature' },
     soc: { label: 'SOC', what: 'battery charge (%)' },
+    // the engine, from the car's own signals (no diagnostics): boost (the sport display's), speed, torque
+    boost: { label: 'BOOST', what: 'boost pressure', engine: true },
+    rpm: { label: 'RPM', what: 'engine speed', engine: true },
+    torque: { label: 'NM', what: 'engine torque', engine: true },
 };
 
 mgu.run({
     async start(ctx) {
         const { ui, settings, log } = ctx;
-        const car = new Car(ctx, ['temps']);
+        const car = new Car(ctx, ['temps', 'rpm', 'torque']);
         const providers = startProviders(log);
         const live = { indicator: 'off', night: null, profile: null, raw: {} };
         const sigStatus = {};
@@ -110,6 +114,17 @@ mgu.run({
             },
         }, 'driver profile', { pollMs: 5000 }, 'de.bmw.infotainment.personalization.SessionManager');
 
+        /* ---------- boost, from the car's sport display signal ----------
+         * FES statusSwitchDriveDynamicSport2: displayBoostPressure in tenths of a bar over atmosphere (its scale's
+         * end, displayMaximumValueBoostPressure, reads 28 on a G05: 2.8 bar); 254 and up: none. */
+        watch('de.bmw.infotainment.drivingexcitement.FES', {
+            statusSwitchDriveDynamicSport2: (v) => {
+                live.raw.sport = JSON.stringify(v);
+                const b = one(v, 'displayBoostPressure');
+                if (typeof b === 'number' && b >= 0 && b < 254) { live.boost = b / 10; live.boostT = Date.now(); }
+            },
+        }, 'boost', { pollMs: 1000 });
+
         /* ---------- what the panel shows ---------- */
         /** The three slots in order: 'power' (the kW meter) or a value's name; none and repeats left out. */
         const slots = () => [settings.get('slot1'), settings.get('slot2'), settings.get('slot3')]
@@ -118,6 +133,16 @@ mgu.run({
         /** A value now, in deg C: the car's own (oil, coolant) first, else a provider's; { c, src } or null. */
         function valueNow(name) {
             const d = car.data();
+            // the engine's (car signals): text in the panel's units (psi with °F, bar with °C)
+            if (VALUES[name] && VALUES[name].engine) {
+                const metric = settings.get('tempUnit') === 'c';
+                if (name === 'boost') {
+                    if (!G.isNum(live.boost) || Date.now() - (live.boostT || 0) > 5000) return null;
+                    return { text: metric ? live.boost.toFixed(2) : (live.boost * 14.5038).toFixed(1), label: metric ? 'BOOST bar' : 'BOOST psi', src: 'car signal (sport display)' };
+                }
+                if (name === 'rpm') return G.isNum(d.rpm) && !d.demo ? { text: String(Math.round(d.rpm / 50) * 50), src: 'car signal' } : null;
+                if (name === 'torque') return G.isNum(d.torque) && !d.demo ? { text: String(Math.round(d.torque)), src: 'car signal' } : null;
+            }
             if ((name === 'oil' || name === 'coolant') && !d.demo && G.isNum(d[name])) return { c: d[name], src: 'car signal' };
             const p = providers.value(name);
             return p ? { c: p.c, text: typeof p.pct === 'number' ? Math.round(p.pct) + '%' : p.text, label: p.label, src: p.app } : null;

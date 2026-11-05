@@ -3,7 +3,8 @@
 A small panel of live values over the Waze map in the instrument cluster or on the HUD (with
 [Waze on cluster](https://github.com/eroobeeroo/idrive-apps)), and turn signal arrows on the HUD. For any car.
 
-- **Its own values from the car:** engine oil and coolant temperature, the turn signals, day / night (the HUD
+- **Its own values from the car:** engine oil and coolant temperature, boost (the car's sport display signal),
+  engine speed and torque, the turn signals, day / night (the HUD
   panel and arrows are dimmer at night), the driver profile (each driver keeps their own settings).
 - **Values from other apps:** eDrive Live provides the battery's power (the kW meter and its bar) and the
   battery temperature. Any app can add values the same way. Optionally (Settings > Thin kW bar along the

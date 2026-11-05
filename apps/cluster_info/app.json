@@ -2,14 +2,15 @@
   "id": "cluster_info",
   "title": "Cluster Info",
   "description": "A small panel of up to three live values (battery power from eDrive Live, battery charge, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OA9E",
   "iconGlyph": "gauge",
   "signals": {
     "de.bmw.infotainment.vehicle.CDS": {
-      "statusEngineTemperature": "rs"
+      "statusEngineTemperature": "rs",
+      "statusEngineSpeed2": "rs"
     },
     "de.bmw.body.Light": {
       "StatusFunctionsIndicators": "s",
@@ -21,6 +22,10 @@
     "de.bmw.infotainment.personalization.SessionManager": {
       "_instances": "de.bmw.infotainment.personalization.SessionManager",
       "currentUserAccountReference": "r"
+    },
+    "de.bmw.infotainment.drivingexcitement.FES": {
+      "statusSwitchDriveDynamicSport2": "rs",
+      "statusActualValueTorque2": "rs"
     }
   },
   "screens": [
@@ -102,6 +107,18 @@
         [
           "coolant",
           "Coolant temperature"
+        ],
+        [
+          "boost",
+          "Boost pressure (car signal)"
+        ],
+        [
+          "rpm",
+          "Engine speed (rpm)"
+        ],
+        [
+          "torque",
+          "Engine torque (Nm)"
         ]
       ]
     },
@@ -134,6 +151,18 @@
         [
           "coolant",
           "Coolant temperature"
+        ],
+        [
+          "boost",
+          "Boost pressure (car signal)"
+        ],
+        [
+          "rpm",
+          "Engine speed (rpm)"
+        ],
+        [
+          "torque",
+          "Engine torque (Nm)"
         ]
       ]
     },
@@ -166,6 +195,18 @@
         [
           "coolant",
           "Coolant temperature"
+        ],
+        [
+          "boost",
+          "Boost pressure (car signal)"
+        ],
+        [
+          "rpm",
+          "Engine speed (rpm)"
+        ],
+        [
+          "torque",
+          "Engine torque (Nm)"
         ]
       ]
     },
