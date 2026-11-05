@@ -127,7 +127,7 @@ function badgeRect(r, where, target, extras, hasPower) {
  * Draws the panel: dark rounded backdrop; with pw (the power) the kW right-aligned, "kW", then the bar (regen
  * left, use right); then the extra values, each a small label over its value. Without pw: the values alone.
  */
-function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt) {
+function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under) {
     extras = extras || [];
     // (the thin kW bar along the bottom, setting underline, is drawn last, over the panel's lower edge)
     const bar = !!pw && pw.bar !== false;
@@ -146,7 +146,8 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt) {
         cv.text(e.text, cx, Math.round(h * 0.84), Math.round(h * 0.5), e.col || t.text, { font: 'bold', align: 'center', literal: true });
         x += cw;
     }
-    if (pw && pw.underline) drawUnderline(cv, t, pw.kw, outMax, inMax, W, h);
+    // (under: { kw } whenever the setting is on, below every slot, whether or not one of them is the kW meter)
+    if (under && G.isNum(under.kw)) drawUnderline(cv, t, under.kw, outMax, inMax, W, h);
 }
 
 /**
@@ -328,15 +329,13 @@ function startOverlay(ctx, lv, opts) {
     function tick() {
         if (where() === 'off' || !place()) return hide();
         const t = ctx.theme(), p = lv.power ? lv.power(t) : null, pw = p && G.isNum(p.kw) ? p : null;
+        const tg0 = place().target, under = lv.under ? lv.under(tg0) : null;
         const extras = lv.extras ? (lv.extras(t) || []).filter((e) => e && e.text !== '--') : [];
         if (!pw && !extras.length) return hide();          // nothing to show (parked, asleep, no provider)
         // the bar after the kW (setting bar): 'on' everywhere, 'cluster' on the cluster only, 'off' nowhere
         if (pw) {
             const bs = settings.get('bar'), tg = place().target;
             pw.bar = bs === 'on' || ((bs === 'cluster' || bs === undefined) && tg !== 'hud');
-            // the thin kW bar along the bottom (setting underline): 'cluster' on the cluster only, 'on' also on the HUD
-            const us = settings.get('underline');
-            pw.underline = us === 'on' || (us === 'cluster' && tg !== 'hud');
         }
         if (!layer(extras.length, pw ? (pw.bar ? true : 'number') : false)) return undefined;
         const op = place().target === 'hud' ? hudOpacity() : 1;
@@ -348,7 +347,7 @@ function startOverlay(ctx, lv, opts) {
         const outMax = G.isNum(lim.outMax) && lim.outMax > 0 ? lim.outMax : 100, inMax = G.isNum(lim.inMax) && lim.inMax > 0 ? lim.inMax : outMax * 0.5;
         // the kW meter after the values in slots before its own (values without a reading are left out)
         const pAt = lv.powerAt ? extras.filter((e) => (e.slot || 0) < lv.powerAt()).length : 0;
-        drawBadge(cv, t, pw, outMax, inMax, extras, pAt);
+        drawBadge(cv, t, pw, outMax, inMax, extras, pAt, under);
         const d = cv.d;
         if (!last) {
             cr.pixels(ref, null, Buffer.from(d.buffer, d.byteOffset, d.length));

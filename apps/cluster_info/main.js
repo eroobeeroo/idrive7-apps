@@ -161,6 +161,14 @@ mgu.run({
                 const v = p.kw, a = Math.abs(v);
                 return { kw: v, text: (v < -IDLE_KW ? '-' : '') + G.fmt(a, a < 10 ? 1 : 0), col: p.old ? t.dim : v < -IDLE_KW ? GO : a >= 60 ? t.warn : t.text };
             },
+            /** The thin kW bar along the bottom (setting underline: 'cluster' on the cluster only, 'on' also on the
+             *  HUD): { kw } whenever an app provides the power, below all three slots, even with no kW meter among them. */
+            under(target) {
+                const us = settings.get('underline');
+                if (!(us === 'on' || (us === 'cluster' && target !== 'hud'))) return null;
+                const p = providers.power();
+                return p && G.isNum(p.kw) ? { kw: p.kw } : null;
+            },
             limits() { const p = providers.power(); return p ? { outMax: p.outMax, inMax: p.inMax } : null; },
             extras(t) {
                 return chosen().map((k) => {
@@ -170,7 +178,7 @@ mgu.run({
             },
             /** The kW meter's slot (0-2 among the slots in use; values with a lower slot go before it). */
             powerAt() { return Math.max(0, slots().indexOf('power')); },
-            keepFast() { providers.want({ power: slots().indexOf('power') >= 0, values: chosen() }); },
+            keepFast() { providers.want({ power: slots().indexOf('power') >= 0 || (settings.get('underline') || 'off') !== 'off', values: chosen() }); },
             indicator: () => live.indicator,
             night: () => live.night === true,
         };
@@ -197,7 +205,7 @@ mgu.run({
                     textWidth: (str, size, o) => cv.textWidth(str, size * k, o) / k,
                 };
                 if (pw) pw.bar = settings.get('bar') !== 'off';            // (as on the cluster)
-                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex, ex.filter((e) => e.slot < src.powerAt()).length);
+                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex, ex.filter((e) => e.slot < src.powerAt()).length, src.under('map'));
             } else {
                 cv.text('Nothing to show now: no power from an app, and no value chosen has a reading', 800, 150, 24, t.dim, { align: 'center' });
             }
