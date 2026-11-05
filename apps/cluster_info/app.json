@@ -2,7 +2,7 @@
   "id": "cluster_info",
   "title": "Cluster Info",
   "description": "A small panel of up to three live values (battery power from eDrive Live, battery charge, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OA9E",
@@ -186,6 +186,26 @@
         [
           "off",
           "Never"
+        ]
+      ]
+    },
+    {
+      "key": "underline",
+      "label": "Thin kW bar along the bottom",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "off",
+          "Off"
+        ],
+        [
+          "cluster",
+          "On the cluster only"
+        ],
+        [
+          "on",
+          "On the cluster and HUD"
         ]
       ]
     },

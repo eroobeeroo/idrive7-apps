@@ -134,6 +134,41 @@ mgu.run({
             },
         }, 'rpm and oil temperature');
 
+        /* ---------- why the engine runs ----------
+         * The car's own reason electric driving is not possible (FES statusElectricVehicleDriveSystemState:
+         * actualValueReasonPreventionElectricVehicle, in this G05 PHEV's catalog): heating, a low battery, the
+         * speed, a power demand, the catalyst... Shown as the car names it, in words where the name is known;
+         * its raw value is kept for the diagnostics page. */
+        const REASONS = [
+            [/KEIN|NONE|NO_?REASON|NICHT_VORHANDEN|^0$|INVALID|UNGUELTIG|SIGNAL_?UNBEFUELLT/, null],
+            [/HEIZ|HEAT|KLIMA|CLIMATE|AIRCON|INNENRAUM/, 'HEATING / CLIMATE'],
+            [/LADEZUSTAND|SOC|STATE_?OF_?CHARGE|SPEICHER|BATTERIE|BATTERY|HVS|HV_/, 'BATTERY LOW'],
+            [/GESCHWINDIGKEIT|SPEED|VMAX|V_?MAX/, 'SPEED TOO HIGH'],
+            [/KICK_?DOWN|LEISTUNG|POWER|FAHRPEDAL|PEDAL|DEMAND|ANFORDERUNG_?FAHRER/, 'POWER DEMAND'],
+            [/KAT|CATALY|ABGAS|EMISSION/, 'CATALYST / EMISSIONS'],
+            [/TEMP|KUEHL|COOL|WARM/, 'TEMPERATURE'],
+            [/SPORT|FAHRERLEBNIS|MODUS|MODE|XTRA/, 'DRIVE MODE'],
+            [/DIAG|SERVICE|WERKSTATT|FEHLER|FAULT|ERROR/, 'FAULT / SERVICE'],
+            [/LADEN|CHARG|BATTERY_?CONTROL|SAVE/, 'BATTERY CONTROL'],
+        ];
+        const reasonText = (raw) => {
+            if (raw === undefined || raw === null || raw === '') return null;
+            const n = String(raw).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+            for (const [re, words] of REASONS) if (re.test(n)) return words;
+            const t = n.replace(/_/g, ' ');
+            return t.length > 30 ? t.slice(0, 29) + '…' : t;
+        };
+        watch('de.bmw.infotainment.drivingexcitement.FES', {
+            statusElectricVehicleDriveSystemState: (v) => {
+                rawSeen('ev drive state', v);
+                const r = one(v, 'actualValueReasonPreventionElectricVehicle');
+                live.evWhy = reasonText(r); live.evWhyRaw = r; live.evWhyT = Date.now();
+                if (r !== live.evWhyLogged) { live.evWhyLogged = r; log.info('electric drive prevented by: ' + r + (live.evWhy ? ' (' + live.evWhy + ')' : '')); }
+            },
+        }, 'engine reason');
+        /** Why the engine runs (or electric driving is not possible), in words, while the car says so. */
+        const engineWhy = () => (live.evWhy && Date.now() - (live.evWhyT || 0) < 120000 ? live.evWhy : null);
+
         // climate on / A/C per zone (on when any zone is on)
         const zones = { climate: {}, ac: {} };
         const onZone = (what, on, zone) => {
@@ -778,7 +813,9 @@ mgu.run({
             const pcol = pw.what === 'REGEN' || pw.what === 'CHARGING' ? GO : pw.kw === null ? t.dim : t.text;
             cv.text(pw.what, 1000, 120, 30, pcol, { font: 'bold', spacing: 2, align: 'right' });
             cv.text(G.isNum(d.v) ? G.fmt(d.v, 0) + ' V' + (G.isNum(d.a) ? '  ·  ' + G.fmt(-d.a * (cfg.powerSign < 0 ? 1 : -1), 0) + ' A' : '') : 'pack --', 1000, 162, 26, t.dim, { align: 'right' });
-            if (d.engine) cv.text('ENGINE RUNNING', 1000, 200, 22, t.warn, { font: 'bold', spacing: 1.5, align: 'right' });
+            // the engine, and why it runs (or why electric driving is not possible) when the car says
+            const why = engineWhy();
+            if (d.engine || why) cv.text((d.engine ? 'ENGINE RUNNING' : 'NO ELECTRIC DRIVE') + (why ? ': ' + why : ''), 1000, 200, 22, t.warn, { font: 'bold', spacing: 1.5, align: 'right' });
             powerBar(cv, t, 48, 248, 952, pw.kw, lim);
             const top = Math.max(20, ...trace.map((p) => p[1]), 0) * 1.1, bottom = Math.max(10, ...trace.map((p) => -p[1]), 0) * 1.1;
             const tr = d.demo ? demoHistory(TRACE_S, 1, (x) => x.kw) : trace;
@@ -1177,7 +1214,7 @@ mgu.run({
             cv.text(pw.what, x0, y0 + 18, 18, scol, { font: 'bold', spacing: 1.5 });
             cv.text((G.isNum(d.v) ? G.fmt(d.v, 0) + ' V' : '-- V') + (G.isNum(d.a) ? '   ' + G.fmt(-d.a * (cfg.powerSign < 0 ? 1 : -1), 0) + ' A' : ''),
                 x1, y0 + 18, 16, t.dim, { align: 'right' });
-            if (d.engine || d.demo) cv.text(d.engine ? 'ENGINE ON' : 'DEMO', (x0 + x1) / 2, y0 + 18, 13, t.warn, { font: 'bold', spacing: 1, align: 'center' });
+            if (d.engine || d.demo) cv.text(d.engine ? 'ENGINE ON' + (engineWhy() ? ': ' + engineWhy() : '') : 'DEMO', (x0 + x1) / 2, y0 + 18, 13, t.warn, { font: 'bold', spacing: 1, align: 'center' });
             // power and charge
             const ky = y0 + 92;
             const vw = cv.text(pw.text, x0, ky, 70, pw.col, { font: 'num' });

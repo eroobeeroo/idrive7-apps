@@ -6,7 +6,9 @@ A small panel of live values over the Waze map in the instrument cluster or on t
 - **Its own values from the car:** engine oil and coolant temperature, the turn signals, day / night (the HUD
   panel and arrows are dimmer at night), the driver profile (each driver keeps their own settings).
 - **Values from other apps:** eDrive Live provides the battery's power (the kW meter and its bar) and the
-  battery temperature. Any app can add values the same way.
+  battery temperature. Any app can add values the same way. Optionally (Settings > Thin kW bar along the
+  bottom) a slim centre-zero kW bar runs along the panel's bottom edge: use to the right, recuperation to the
+  left in green.
 - **Where:** where the Waze map is (cluster or HUD), or always on the HUD; at the bottom or top of the map.
   Shown only while the map is (or, on the HUD, while there is something to show), so it never holds the
   cluster or HUD on its own.

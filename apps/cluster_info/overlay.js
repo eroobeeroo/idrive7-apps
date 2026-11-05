@@ -129,6 +129,7 @@ function badgeRect(r, where, target, extras, hasPower) {
  */
 function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt) {
     extras = extras || [];
+    // (the thin kW bar along the bottom, setting underline, is drawn last, over the panel's lower edge)
     const bar = !!pw && pw.bar !== false;
     const W = cv.w, h = cv.h, L = layout(h, bar), pwW = pw ? Math.max(L.w, W - extras.length * colW(h)) : 0;
     cv.clear([0, 0, 0, 0]);
@@ -145,6 +146,24 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt) {
         cv.text(e.text, cx, Math.round(h * 0.84), Math.round(h * 0.5), e.col || t.text, { font: 'bold', align: 'center', literal: true });
         x += cw;
     }
+    if (pw && pw.underline) drawUnderline(cv, t, pw.kw, outMax, inMax, W, h);
+}
+
+/**
+ * The thin kW bar along the panel's bottom (setting underline): its whole width inside the rounded corners,
+ * zero where the regen and use spans meet (as the bar after the kW), recuperation left of it in green, use
+ * right of it in the power colours. A hairline track when nothing flows.
+ */
+function drawUnderline(cv, t, kw, outMax, inMax, W, h) {
+    const bh = Math.max(3, Math.round(h * 0.075)), inset = Math.round(h * 0.3), y = h - bh - Math.max(2, Math.round(h * 0.05));
+    const bx = inset, bw = W - 2 * inset, span = outMax + inMax, x0 = bx + bw * inMax / span;
+    const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
+    cv.roundRect(bx, y, bw, bh, bh / 2, withAlpha(t.track, 0.9));
+    if (G.isNum(kw) && Math.abs(kw) > 0.05) {
+        if (kw > 0) cv.rampRect(x0, y, X(kw) - x0, bh, bh / 2, t.hotRamp || t.ramp, x0, bx + bw - x0);
+        else cv.roundRect(X(kw), y, x0 - X(kw), bh, bh / 2, GO);
+    }
+    cv.fillRect(Math.round(x0) - 1, y - 2, 2, bh + 4, t.text);
 }
 
 /** The kW meter in the panel at x, w wide: the kW right-aligned, "kW", then the bar (regen left, use right). */
@@ -315,6 +334,9 @@ function startOverlay(ctx, lv, opts) {
         if (pw) {
             const bs = settings.get('bar'), tg = place().target;
             pw.bar = bs === 'on' || ((bs === 'cluster' || bs === undefined) && tg !== 'hud');
+            // the thin kW bar along the bottom (setting underline): 'cluster' on the cluster only, 'on' also on the HUD
+            const us = settings.get('underline');
+            pw.underline = us === 'on' || (us === 'cluster' && tg !== 'hud');
         }
         if (!layer(extras.length, pw ? (pw.bar ? true : 'number') : false)) return undefined;
         const op = place().target === 'hud' ? hudOpacity() : 1;
