@@ -4,6 +4,7 @@
 #   during a conflicted merge: eDrive Live is this fork's own (upstream folded it into eDrive), so its files
 #   stay as here; a file this fork deleted that upstream changed stays deleted, and so does any other app's;
 #   README.md takes upstream's text with this fork's note (readme-note.md) on top;
+#   LICENSE stays this fork's (GPL-3.0-or-later), and upstream's LICENSE (its MIT license) goes to LICENSE-MIT;
 #   --after (the merge committed): an app upstream added or brought back is taken out again, the fork's own
 #   test workflow and Store manifest settings are kept, and the workflow for removed apps stays gone.
 set -u
@@ -32,6 +33,9 @@ git status --porcelain | while read -r code path; do
                 apps/edrive2/*|apps/cluster_info/*|apps/light_show/*) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path";;
                 apps/*) git rm -qf "$path" 2>/dev/null || true; echo "rule: dropped $path (an app this fork doesn't carry)";;
                 .github/workflows/app-tests.yml) git checkout --ours -- "$path" && git add "$path"; echo "rule: kept this fork's $path (its own test list)";;
+                LICENSE)
+                    git checkout --ours -- LICENSE && git show MERGE_HEAD:LICENSE > LICENSE-MIT
+                    git add LICENSE LICENSE-MIT; echo "rule: kept this fork's LICENSE (GPL-3.0-or-later); upstream's MIT license to LICENSE-MIT";;
                 README.md)
                     git checkout --theirs -- README.md
                     { cat "$HERE/readme-note.md"; cat README.md; } > README.md.new && mv README.md.new README.md

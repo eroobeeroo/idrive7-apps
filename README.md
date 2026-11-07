@@ -15,6 +15,12 @@
 > and controller gate they need. Every other app comes from the original,
 > [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps), so the MGU Store
 > lists each app once.
+>
+> **License.** This fork is GPL-3.0-or-later ([`LICENSE`](LICENSE)): anyone who distributes it, or a changed
+> version, must make its full source available under the same license. Code from the original project is also
+> available under its MIT license ([`LICENSE-MIT`](LICENSE-MIT)), which stays with it; the license section
+> further down describes the original project. Versions of this fork's apps published before this change remain
+> under the MIT license they were published with.
 
 **English** | [中文 (Chinese translation)](README.zh-CN.md)
 
