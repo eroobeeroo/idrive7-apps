@@ -349,9 +349,8 @@ mgu.run({
             return null;
         }
 
-        // one request at a time on the diagnostic link: the fast and the slow reads take turns
-        let chain = Promise.resolve();
-        // a queue rather than a plain chain, so a power read (urgent) goes ahead of the slow reads that wait
+        // one request at a time on the diagnostic link: the fast and the slow reads take turns, in a queue rather
+        // than a plain chain, so a power read (urgent) goes ahead of the slow reads that wait
         const queue = [];
         let pumping = false;
         async function pump() {
@@ -359,15 +358,13 @@ mgu.run({
             pumping = true;
             while (queue.length) {
                 const j = queue.shift(), t0 = Date.now();
-                busyWith = j.label; busySince = t0;
                 try { j.res(await j.fn()); } catch (e) { j.rej(e); }
                 const ms = Date.now() - t0;
-                busyWith = null;
                 if (ms > 1500) { stalls++; log.warn('link held ' + ms + ' ms by ' + j.label + (queue.length ? ' (' + queue.length + ' waiting)' : '')); }
             }
             pumping = false;
         }
-        let busyWith = null, busySince = 0, stalls = 0;
+        let stalls = 0;
         const exclusive = (fn, urgent, label) => new Promise((res, rej) => {
             const j = { fn, res, rej, label: label || (urgent ? 'power' : '?') };
             if (urgent) queue.unshift(j); else queue.push(j);
@@ -395,7 +392,7 @@ mgu.run({
         const trip = { out: 0, regen: 0, charged: 0, climate: 0, peakOut: 0, peakIn: 0, since: Date.now() };
         const trace = [], climTrace = [], tempTrace = [];
         const push = (arr, keep, v) => { const now = Date.now(); arr.push([now, v]); while (arr.length && now - arr[0][0] > keep * 1000) arr.shift(); };
-        let iFail = 0, iTry = 0, vTick = 0, iOk = false, pMiss = 0, pLogT = 0;
+        let iFail = 0, iTry = 0, iOk = false, pMiss = 0, pLogT = 0;
         let provider = null;             // Cluster Info's share (below)
         const KW_KEEP = 15000;           // a missed power read: the last value stays (dimmed) this long
         function onPower(kw, now) {
@@ -455,8 +452,9 @@ mgu.run({
         function schedulePower() {
             clearTimeout(powerTimer);
             const s = shown() ? settings.get('powerPoll') : Math.max(BG_POWER_S, settings.get('powerPoll'));
-            // 0.1 s: as fast as the battery unit answers (one read waits for the last)
-            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), Math.max(60, s * 1000 - (s <= 0.1 ? 1000 : 0)));
+            // 0.1 s: as fast as the battery unit answers (one read waits for the last; a short breath between, so
+            // the slow reads and other apps get the link too)
+            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), !diag.available || !inUse() || (!iOk && iFail >= 3) ? 500 : s <= 0.1 ? 10 : Math.max(60, s * 1000));
         }
         schedulePower();
 

@@ -34,7 +34,6 @@ const HUD_VISIBLE_RIGHT = 680;   // the HUD shows up to x ~683 (a park's fill in
 const HUD_VISIBLE_BOTTOM = 400;
 const HUD_RIGHT_GAP = 4;        // HUD: the panel's gap from the right edge of what the HUD shows
 const HUD_SPEED_CLEAR = 405;     // left edge limit: the speed readout ends at x ~331 and Waze's car icon at ~400 (85 % map, G05)
-const HUD_SPEED_RIGHT = 420;     // the HUD's speed readout ends left of this (scene pixels), with a gap
 const HUD_MAX_H = 60;             // the HUD panel's height at most (the room right of the speed limits it first)
 const HUD_MAX_PCT = 85;           // the HUD map's widest (waze-on-cluster hud_width_pct)
 // turn signal arrows on the HUD: small, a pair at the top middle, inside the standard map's top edge
