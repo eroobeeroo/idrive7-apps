@@ -295,7 +295,9 @@ check('the HUD map moved by its offset: the panel moves with it, held inside the
     assert.strictEqual(b.y, a.y + 40); assert.strictEqual(b.x, a.x);
     assert.strictEqual(c.y + c.h, 480, 'held inside');
     assert.deepStrictEqual(mapRect('map', 0, 50, 50), mapRect('map', 0), 'the cluster map has no offset');
-    assert.strictEqual(badgeRect(b, 'bottom', 'hud', 1).y, badgeRect(a, 'bottom', 'hud', 1).y + 40);
+    const bb = badgeRect(b, 'bottom', 'hud', 1, true, true);
+    assert(bb.y + bb.h <= 400, 'the panel and its thin bar above the HUD\'s visible bottom: ' + (bb.y + bb.h));
+    assert.strictEqual(badgeRect(mapRect('hud', 70, 0, -40), 'bottom', 'hud', 1).y, badgeRect(a, 'bottom', 'hud', 1).y - 40, 'moved up: follows');
 });
 check('the thin kW bar: in a strip under the panel, the panel where it was, the layer that much taller', () => {
     const r = mapRect('map', 0), off = badgeRect(r, 'bottom', 'map', 2, true), on = badgeRect(r, 'bottom', 'map', 2, true, true);
