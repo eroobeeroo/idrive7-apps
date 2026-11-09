@@ -115,13 +115,13 @@ mgu.run({
         }, 'driver profile', { pollMs: 5000 }, 'de.bmw.infotainment.personalization.SessionManager');
 
         /* ---------- boost, from the car's sport display signal ----------
-         * FES statusSwitchDriveDynamicSport2: displayBoostPressure in tenths of a bar over atmosphere (its scale's
-         * end, displayMaximumValueBoostPressure, reads 28 on a G05: 2.8 bar); 254 and up: none. */
+         * FES statusSwitchDriveDynamicSport2: displayBoostPressure in hundredths of a bar over atmosphere
+         * (tenths read ten times too high against the engine unit and M Vitals, issue #7); 254 and up: none. */
         watch('de.bmw.infotainment.drivingexcitement.FES', {
             statusSwitchDriveDynamicSport2: (v) => {
                 live.raw.sport = JSON.stringify(v);
                 const b = one(v, 'displayBoostPressure');
-                if (typeof b === 'number' && b >= 0 && b < 254) { live.boost = b / 10; live.boostT = Date.now(); }
+                if (typeof b === 'number' && b >= 0 && b < 254) { live.boost = b / 100; live.boostT = Date.now(); }
             },
         }, 'boost', { pollMs: 1000 });
 
