@@ -299,21 +299,23 @@ check('the HUD map moved by its offset: the panel moves with it, held inside the
     assert(bb.y + bb.h <= 400, 'the panel and its thin bar above the HUD\'s visible bottom: ' + (bb.y + bb.h));
     assert.strictEqual(badgeRect(mapRect('hud', 70, 0, -40), 'bottom', 'hud', 1).y, badgeRect(a, 'bottom', 'hud', 1).y - 40, 'moved up: follows');
 });
-check('the thin kW bar: in a strip under the panel, the panel where it was, the layer that much taller', () => {
+check('the thin kW bar: in a strip above the panel, the panel where it was, the layer that much taller', () => {
     const r = mapRect('map', 0), off = badgeRect(r, 'bottom', 'map', 2, true), on = badgeRect(r, 'bottom', 'map', 2, true, true);
     const u = underStrip(off.ph);
-    assert.strictEqual(on.ph, off.ph); assert.strictEqual(on.h, off.h + u.total); assert.strictEqual(on.y + on.h, off.y + off.h, 'its bottom where the panel\'s was');
-    // drawn: nothing of the bar inside the panel's own rows, all of it in the strip
+    assert.strictEqual(on.ph, off.ph); assert.strictEqual(on.h, off.h + u.total); assert.strictEqual(on.y + on.h, off.y + off.h, 'the panel\'s bottom where it was');
+    // drawn: the panel's rows the same as without the bar (one strip lower in the layer), the bar above them
     const { Canvas } = require(path.join(ROOT, 'kit', 'runtime', 'canvas'));
     const t = require(path.join(ROOT, 'kit', 'runtime', 'themes')).theme('m_tricolour');
-    const cv = new Canvas(on.w, on.h), plain = new Canvas(on.w, on.h);
+    const cv = new Canvas(on.w, on.h), plain = new Canvas(off.w, off.h);
     const ex = [{ label: 'OIL', text: '201°' }, { label: 'COOL', text: '203°' }];
     drawBadge(cv, t, null, 100, 50, ex, 0, { kw: 30 }, on.ph);
-    drawBadge(plain, t, null, 100, 50, ex, 0, null, on.ph);
+    drawBadge(plain, t, null, 100, 50, ex, 0, null, off.ph);
     const px = (c, x, y) => Array.from(c.d.slice((y * c.w + x) * 4, (y * c.w + x) * 4 + 4)).join(',');
-    let inPanel = 0, inStrip = 0;
-    for (let y = 0; y < on.h; y++) for (let x = 0; x < on.w; x++) if (px(cv, x, y) !== px(plain, x, y)) { if (y < on.ph) inPanel++; else inStrip++; }
-    assert.strictEqual(inPanel, 0, 'the bar inside the panel'); assert(inStrip > 50, 'the bar drawn under it: ' + inStrip);
+    let panelDiff = 0, inStrip = 0;
+    for (let y = 0; y < on.h; y++) for (let x = 0; x < on.w; x++) {
+        if (y >= u.total) { if (px(cv, x, y) !== px(plain, x, y - u.total)) panelDiff++; } else if (px(cv, x, y) !== '0,0,0,0') inStrip++;
+    }
+    assert.strictEqual(panelDiff, 0, 'the panel moved or drawn over'); assert(inStrip > 50, 'the bar drawn above it: ' + inStrip);
 });
 console.log(ok + ' checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });

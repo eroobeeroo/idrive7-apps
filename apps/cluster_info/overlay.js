@@ -115,14 +115,28 @@ function layout(h, bar) {
     return { w: bar ? bx + bw + pad : unitX + unitW + pad, pad, numR, unitX, bx, bw };
 }
 
-/** The thin kW bar's strip under a panel h high (setting underline): { gap, bh, total }. */
+/** The canvas cv with everything drawn dy lower (the panel under the thin kW bar's strip). */
+function shifted(cv, dy) {
+    if (!dy) return cv;
+    return {
+        w: cv.w, h: cv.h,
+        clear: (c) => cv.clear(c),
+        roundRect: (x, y, ...r) => cv.roundRect(x, y + dy, ...r),
+        fillRect: (x, y, ...r) => cv.fillRect(x, y + dy, ...r),
+        rampRect: (x, y, ...r) => cv.rampRect(x, y + dy, ...r),
+        text: (str, x, y, ...r) => cv.text(str, x, y + dy, ...r),
+        textWidth: (...a) => cv.textWidth(...a),
+    };
+}
+/** The thin kW bar's strip above a panel h high (setting underline): { gap, bh, total }. */
 function underStrip(h) {
     const bh = Math.max(3, Math.round(h * 0.075));
     const gap = Math.max(2, Math.round(h * 0.06));
     return { gap, bh, total: gap + bh };
 }
 /** The badge's place and size inside the map's rectangle r: { x, y, w, h, ph } on the target; ph is the panel's
- *  own height, h the layer's (with underOn, the thin kW bar's strip under the panel too). */
+ *  own height, h the layer's (with underOn, the thin kW bar's strip above the panel too: the panel stays where it
+ *  was, the layer reaches up over it). */
 function badgeRect(r, where, target, extras, hasPower, underOn) {
     if (hasPower === undefined) hasPower = true;      // true: the kW and its bar, 'number': the kW alone, false: neither
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
@@ -171,7 +185,10 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under, ph) {
     // (ph: the panel's height; the thin kW bar along the bottom, setting underline, goes in the strip under it)
     const bar = !!pw && pw.bar !== false;
     const W = cv.w, h = ph || cv.h, L = layout(h, bar), pwW = pw ? Math.max(L.w, W - extras.length * colW(h)) : 0;
+    // the thin kW bar's strip at the top of the layer (when it has the room), the panel below it
+    const strip = !!under && cv.h >= h + underStrip(h).total, top = strip ? cv.h - h : 0, real = cv;
     cv.clear([0, 0, 0, 0]);
+    cv = shifted(cv, top);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
     // the items left to right: the kW meter at its slot (powerAt among them), the values in the room left
     const n = extras.length + (pw ? 1 : 0), at = pw ? Math.min(Math.max(0, powerAt || 0), extras.length) : -1;
@@ -185,18 +202,18 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under, ph) {
         cv.text(e.text, cx, Math.round(h * 0.84), Math.round(h * 0.5), e.col || t.text, { font: 'bold', align: 'center', literal: true });
         x += cw;
     }
-    // (under: { kw } whenever the setting is on, below every slot, whether or not one of them is the kW meter)
-    if (under && cv.h >= h + underStrip(h).total) drawUnderline(cv, t, under.kw, outMax, inMax, W, h);
+    // (under: { kw } whenever the setting is on, above every slot, whether or not one of them is the kW meter)
+    if (strip) drawUnderline(real, t, under.kw, outMax, inMax, W, h, top);
 }
 
 /**
- * The thin kW bar along the panel's bottom (setting underline): its whole width inside the rounded corners,
+ * The thin kW bar just above the panel (setting underline): its whole width inside the rounded corners,
  * zero where the regen and use spans meet (as the bar after the kW), recuperation left of it in green, use
  * right of it in the power colours. A hairline track when nothing flows.
  */
-function drawUnderline(cv, t, kw, outMax, inMax, W, h) {
-    // under the panel (h its height), clear of its values: the strip underStrip(h) the layer has there
-    const u = underStrip(h), bh = u.bh, inset = Math.round(h * 0.3), y = h + u.gap;
+function drawUnderline(cv, t, kw, outMax, inMax, W, h, top) {
+    // above the panel (h its height, from y top), clear of its values: the strip underStrip(h) the layer has there
+    const u = underStrip(h), bh = u.bh, inset = Math.round(h * 0.3), y = Math.max(0, (top || u.total) - u.gap - bh);
     const bx = inset, bw = W - 2 * inset, span = outMax + inMax, x0 = bx + bw * inMax / span;
     const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
     cv.roundRect(bx, y, bw, bh, bh / 2, withAlpha(t.track, 0.9));
