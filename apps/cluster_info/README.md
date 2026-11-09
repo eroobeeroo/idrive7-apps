@@ -8,9 +8,11 @@ A small panel of live values over the Waze map in the instrument cluster or on t
   panel and arrows are dimmer at night), the driver profile (each driver keeps their own settings).
 - **Values from other apps:** eDrive Live provides the battery's power (the kW meter and its bar) and the
   battery temperature. Any app can add values the same way. Optionally (Settings > Thin kW bar along the
-  bottom) a slim centre-zero kW bar runs along the panel's bottom edge, under all three slots (whether or not
-  one of them is the kW meter): use to the right, recuperation to the left in green.
+  bottom) a slim centre-zero kW bar runs just under the panel, clear of its values, the width of all three
+  slots (whether or not one of them is the kW meter): use to the right, recuperation to the left in green.
 - **Where:** where the Waze map is (cluster or HUD), or always on the HUD; at the bottom or top of the map.
+  It follows Robert's Waze on cluster (robertnisipeanu/idrive-apps), with the map on the cluster, the HUD or
+  both (then on the cluster), and the HUD map's size and position as set there.
   Shown only while the map is (or, on the HUD, while there is something to show), so it never holds the
   cluster or HUD on its own.
 - **Its page** shows the panel as it is now, larger, and whether each source works (turn signals, day / night,

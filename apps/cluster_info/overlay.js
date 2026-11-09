@@ -44,8 +44,9 @@ const NIGHT_DIM = 0.6;            // the HUD extras at night, of their brightnes
 const BLINK_ON_MS = 335, BLINK_OFF_MS = 303, BLINK_LEAD_MS = 40;
 const ARROW_TICK_MS = 25;        // (the flash edges within 25 ms of the cluster's)
 
-/** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_geometry.cpp map_quad). */
-function mapRect(target, hudPct) {
+/** The map's rectangle on a target, as waze-on-cluster places it (map_feed.cpp quad, map_quad): on the HUD
+ *  moved by its offset (hud_x, hud_y in status.json, already held inside the scene there), held inside here too. */
+function mapRect(target, hudPct, hudX, hudY) {
     const sc = SCENES[target];
     if (!sc) return null;
     const [tw, th] = sc;
@@ -65,7 +66,32 @@ function mapRect(target, hudPct) {
     // shown smaller than the picture: scaled to a multiple of 4, centred where the rectangle was
     const sw = w & ~3, sh = h & ~3;
     if (sw < TEX.w || sh < TEX.h) { x += Math.floor((w - sw) / 2); y += Math.floor((h - sh) / 2); w = sw; h = sh; }
+    if (target === 'hud' && (hudX || hudY)) {
+        x = Math.max(0, Math.min(tw - w, x + (Math.round(hudX) || 0)));
+        y = Math.max(0, Math.min(th - h, y + (Math.round(hudY) || 0)));
+    }
     return { x, y, w, h };
+}
+
+/**
+ * Where the Waze map shows, from waze-on-cluster's status.json: { showing, target, pct, hx, hy }.
+ * Two forms: the original's (robertnisipeanu/idrive-apps: target is the cluster's, map or panel, its state in
+ * state; the HUD's on/off in hud and its state in hud_state, the map on both at once possible) and the older
+ * build's (target map, hud or map+hud, its state in state). Both on: the cluster's.
+ */
+function parseStatus(s) {
+    const pct = Number(s.hud_width_pct) || 0, hx = Number(s.hud_x) || 0, hy = Number(s.hud_y) || 0;
+    let target = null, showing = false;
+    if ('hud_state' in s || 'cluster' in s) {
+        const ct = String(s.target || '').split('+')[0];
+        if (s.cluster !== 0 && s.state === 'showing' && SCENES[ct] && ct !== 'hud') { target = ct; showing = true; }
+        else if (s.hud && s.hud_state === 'showing') { target = 'hud'; showing = true; }
+        else target = ct || null;
+    } else {
+        target = String(s.target || '').split('+')[0] || null;
+        showing = s.state === 'showing' && !!SCENES[target];
+    }
+    return { showing, target, pct, hx, hy };
 }
 
 /**
@@ -86,8 +112,15 @@ function layout(h, bar) {
     return { w: bar ? bx + bw + pad : unitX + unitW + pad, pad, numR, unitX, bx, bw };
 }
 
-/** The badge's place and size inside the map's rectangle r: { x, y, w, h } on the target. */
-function badgeRect(r, where, target, extras, hasPower) {
+/** The thin kW bar's strip under a panel h high (setting underline): { gap, bh, total }. */
+function underStrip(h) {
+    const bh = Math.max(3, Math.round(h * 0.075));
+    const gap = Math.max(2, Math.round(h * 0.06));
+    return { gap, bh, total: gap + bh };
+}
+/** The badge's place and size inside the map's rectangle r: { x, y, w, h, ph } on the target; ph is the panel's
+ *  own height, h the layer's (with underOn, the thin kW bar's strip under the panel too). */
+function badgeRect(r, where, target, extras, hasPower, underOn) {
     if (hasPower === undefined) hasPower = true;      // true: the kW and its bar, 'number': the kW alone, false: neither
     // the HUD's size to its map's width; on the cluster 1.3 times it (72 high), read at a glance past the wheel;
     // each extra value (a temperature) adds a column EXTRA_COL times the height wide
@@ -113,6 +146,8 @@ function badgeRect(r, where, target, extras, hasPower) {
     // of HUD_SPEED_RIGHT: the HUD's own speed readout sits left of the middle on that row (seen on a G05)
     // (cluster: at the bottom edge, below the car's arrow in the middle of the map, which it covered higher up)
     const m = target === 'hud' ? 4 : 32;   // (HUD: its digits on the speed readout's line; cluster: clear of the dimmed edge below)
+    const ph = h;
+    h = ph + (underOn ? underStrip(ph).total : 0);
     const y = where === 'top' ? r.y + m : r.y + r.h - h - m;
     let x = r.x + Math.floor((r.w - w) / 2);
     if (target === 'hud' && where !== 'top') {
@@ -120,18 +155,18 @@ function badgeRect(r, where, target, extras, hasPower) {
         // never left of HUD_SPEED_CLEAR (the speed readout)
         x = Math.max(HUD_SPEED_CLEAR, hudRight - HUD_RIGHT_GAP - w);
     }
-    return { x, y, w, h };
+    return { x, y, w, h, ph };
 }
 
 /**
  * Draws the panel: dark rounded backdrop; with pw (the power) the kW right-aligned, "kW", then the bar (regen
  * left, use right); then the extra values, each a small label over its value. Without pw: the values alone.
  */
-function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under) {
+function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under, ph) {
     extras = extras || [];
-    // (the thin kW bar along the bottom, setting underline, is drawn last, over the panel's lower edge)
+    // (ph: the panel's height; the thin kW bar along the bottom, setting underline, goes in the strip under it)
     const bar = !!pw && pw.bar !== false;
-    const W = cv.w, h = cv.h, L = layout(h, bar), pwW = pw ? Math.max(L.w, W - extras.length * colW(h)) : 0;
+    const W = cv.w, h = ph || cv.h, L = layout(h, bar), pwW = pw ? Math.max(L.w, W - extras.length * colW(h)) : 0;
     cv.clear([0, 0, 0, 0]);
     cv.roundRect(0, 0, W, h, h * 0.32, [8, 9, 12, 190]);
     // the items left to right: the kW meter at its slot (powerAt among them), the values in the room left
@@ -147,7 +182,7 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under) {
         x += cw;
     }
     // (under: { kw } whenever the setting is on, below every slot, whether or not one of them is the kW meter)
-    if (under && G.isNum(under.kw)) drawUnderline(cv, t, under.kw, outMax, inMax, W, h);
+    if (under && cv.h >= h + underStrip(h).total) drawUnderline(cv, t, under.kw, outMax, inMax, W, h);
 }
 
 /**
@@ -156,7 +191,8 @@ function drawBadge(cv, t, pw, outMax, inMax, extras, powerAt, under) {
  * right of it in the power colours. A hairline track when nothing flows.
  */
 function drawUnderline(cv, t, kw, outMax, inMax, W, h) {
-    const bh = Math.max(3, Math.round(h * 0.075)), inset = Math.round(h * 0.3), y = h - bh - Math.max(2, Math.round(h * 0.05));
+    // under the panel (h its height), clear of its values: the strip underStrip(h) the layer has there
+    const u = underStrip(h), bh = u.bh, inset = Math.round(h * 0.3), y = h + u.gap;
     const bx = inset, bw = W - 2 * inset, span = outMax + inMax, x0 = bx + bw * inMax / span;
     const X = (v) => x0 + G.clamp(v, -inMax, outMax) / span * bw;
     cv.roundRect(bx, y, bw, bh, bh / 2, withAlpha(t.track, 0.9));
@@ -256,24 +292,23 @@ function startOverlay(ctx, lv, opts) {
     /** Where the badge goes now: { target, pct } (the map's place it sits in), null for nowhere. */
     const place = () => {
         // (the HUD size chosen in Waze on cluster, even while its map is on the cluster: the panel stays put)
-        if (onHud()) return { target: 'hud', pct: map.pct };
-        return map.showing ? { target: map.target, pct: map.pct } : null;
+        if (onHud()) return { target: 'hud', pct: map.pct, hx: map.hx, hy: map.hy };
+        return map.showing ? { target: map.target, pct: map.pct, hx: map.hx, hy: map.hy } : null;
     };
     let CR = opts.ClusterRender;
     let cr = null, ref = 0, geo = '', cv = null, last = null, visible = false, lastT = 0;
-    let map = { showing: false, target: null, pct: 0 }, statusText = '';
+    let map = { showing: false, target: null, pct: 0, hx: 0, hy: 0 }, statusText = '';
     let warned = '';
     const warnOnce = (m) => { if (m !== warned) { warned = m; log.warn('map overlay: ' + m); } };
 
     function readStatus() {
         fs.readFile(statusPath, 'utf8', (err, txt) => {
-            if (err) { if (map.showing) log.info('map overlay: Waze on cluster status gone'); map = { showing: false, target: null, pct: map.pct };   /* (the HUD size kept) */ statusText = ''; return tick(); }
+            if (err) { if (map.showing) log.info('map overlay: Waze on cluster status gone'); map = { showing: false, target: null, pct: map.pct, hx: map.hx, hy: map.hy };   /* (the HUD size kept) */ statusText = ''; return tick(); }
             if (txt === statusText) return undefined;
             statusText = txt;
             let s;
             try { s = JSON.parse(txt); } catch (e) { return undefined; }    // half written: the next read
-            const target = String(s.target || '').split('+')[0] || null;
-            const next = { showing: s.state === 'showing' && !!SCENES[target], target, pct: Number(s.hud_width_pct) || 0 };
+            const next = parseStatus(s);
             if (next.showing !== map.showing || next.target !== map.target) log.info('map overlay: Waze map ' + (next.showing ? 'showing on ' + next.target : 'not showing (' + (s.state || '?') + ')'));
             map = next;
             if (place()) lv.keepFast();
@@ -308,10 +343,10 @@ function startOverlay(ctx, lv, opts) {
         * (settings.get('nightDim') !== 'off' && lv.night && lv.night() ? NIGHT_DIM : 1);
     function layer(nExtras, hasPower) {
         const pl = place();
-        const r = pl && mapRect(pl.target, pl.pct);
+        const r = pl && mapRect(pl.target, pl.pct, pl.hx, pl.hy);
         if (!r) return 0;
-        const b = badgeRect(r, where(), pl.target, nExtras, hasPower);
-        const key = [pl.target, b.x, b.y, b.w, b.h].join(',');
+        const b = badgeRect(r, where(), pl.target, nExtras, hasPower, !!(lv.underOn && lv.underOn(pl.target)));
+        const key = [pl.target, b.x, b.y, b.w, b.h, b.ph].join(',');
         if (key === geo && ref) return ref;
         if (!client()) return 0;
         if (ref) cr.drop(ref);
@@ -319,6 +354,7 @@ function startOverlay(ctx, lv, opts) {
         visible = false;
         last = null;
         cv = new Canvas(b.w, b.h);
+        cv.ph = b.ph;
         opacity = pl.target === 'hud' ? hudOpacity() : 1;
         ref = cr.image({ target: pl.target, klass: 'overlay', z: 10, x: b.x, y: b.y, w: b.w, h: b.h, iw: b.w, ih: b.h, visible: false, opacity });
         if (!ref) warnOnce('the renderer refused a ' + b.w + 'x' + b.h + ' layer');
@@ -347,7 +383,7 @@ function startOverlay(ctx, lv, opts) {
         const outMax = G.isNum(lim.outMax) && lim.outMax > 0 ? lim.outMax : 100, inMax = G.isNum(lim.inMax) && lim.inMax > 0 ? lim.inMax : outMax * 0.5;
         // the kW meter after the values in slots before its own (values without a reading are left out)
         const pAt = lv.powerAt ? extras.filter((e) => (e.slot || 0) < lv.powerAt()).length : 0;
-        drawBadge(cv, t, pw, outMax, inMax, extras, pAt, under);
+        drawBadge(cv, t, pw, outMax, inMax, extras, pAt, under, cv.ph);
         const d = cv.d;
         if (!last) {
             cr.pixels(ref, null, Buffer.from(d.buffer, d.byteOffset, d.length));
@@ -441,4 +477,4 @@ function startOverlay(ctx, lv, opts) {
     };
 }
 
-module.exports = { startOverlay, mapRect, badgeRect, drawBadge, drawArrow, changed };
+module.exports = { startOverlay, mapRect, badgeRect, drawBadge, drawArrow, changed, parseStatus, underStrip };

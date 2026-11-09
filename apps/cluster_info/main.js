@@ -164,10 +164,14 @@ mgu.run({
             /** The thin kW bar along the bottom (setting underline: 'cluster' on the cluster only, 'on' also on the
              *  HUD): { kw } whenever an app provides the power, below all three slots, even with no kW meter among them. */
             under(target) {
-                const us = settings.get('underline');
-                if (!(us === 'on' || (us === 'cluster' && target !== 'hud'))) return null;
+                if (!this.underOn(target)) return null;
                 const p = providers.power();
-                return p && G.isNum(p.kw) ? { kw: p.kw } : null;
+                return { kw: p && G.isNum(p.kw) ? p.kw : null };
+            },
+            /** Whether the thin kW bar shows on this target (its strip under the panel is kept while it does). */
+            underOn(target) {
+                const us = settings.get('underline');
+                return us === 'on' || (us === 'cluster' && target !== 'hud');
             },
             limits() { const p = providers.power(); return p ? { outMax: p.outMax, inMax: p.inMax } : null; },
             extras(t) {
@@ -192,7 +196,7 @@ mgu.run({
             G.panel(cv, t, 24, 44, 1552, 468, 'Cluster Info');
             const pw = src.power(t), ex = src.extras(t).filter((e) => e.text !== '--');
             if (pw || ex.length) {
-                const b = badgeRect(mapRect('map', 0), 'bottom', 'map', ex.length, !!pw);
+                const b = badgeRect(mapRect('map', 0), 'bottom', 'map', ex.length, !!pw, src.underOn('map'));
                 const lim = src.limits() || {};
                 // the panel drawn into this page, 1.5 times its cluster size, centred
                 const k = 1.5, ox = Math.round(800 - b.w * k / 2), oy = 92;
@@ -205,7 +209,7 @@ mgu.run({
                     textWidth: (str, size, o) => cv.textWidth(str, size * k, o) / k,
                 };
                 if (pw) pw.bar = settings.get('bar') !== 'off';            // (as on the cluster)
-                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex, ex.filter((e) => e.slot < src.powerAt()).length, src.under('map'));
+                drawBadge(view, t, pw, lim.outMax || 100, lim.inMax || 50, ex, ex.filter((e) => e.slot < src.powerAt()).length, src.under('map'), b.ph);
             } else {
                 cv.text('Nothing to show now: no power from an app, and no value chosen has a reading', 800, 150, 24, t.dim, { align: 'center' });
             }

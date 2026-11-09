@@ -18,7 +18,7 @@ Module._load = function (req, parent, isMain) {
     if (req.startsWith('./kit/')) return load.call(this, path.join(KIT, req.slice(6)), parent, isMain);
     return load.call(this, req, parent, isMain);
 };
-const { startOverlay, mapRect, badgeRect, drawBadge, changed } = require(path.join(ROOT, 'apps', 'cluster_info', 'overlay.js'));
+const { startOverlay, mapRect, badgeRect, drawBadge, changed, parseStatus, underStrip } = require(path.join(ROOT, 'apps', 'cluster_info', 'overlay.js'));
 const { Canvas } = require(path.join(KIT, 'canvas'));
 const themes = require(path.join(KIT, 'themes'));
 const theme = themes.theme('m_tricolour');
@@ -46,8 +46,8 @@ check('badge inside the map, bottom and top', () => {
         assert(b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h, tg + ' ' + pct + ' ' + w);
         assert(b.w % 4 === 0 && b.h % 2 === 0 && b.w >= 100);
     })));
-    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 440, y: 376, w: 208, h: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
-    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 449, y: 276, w: 172, h: 60 });   // the HUD's, at the map's right edge
+    assert.deepStrictEqual(badgeRect(mapRect('map', 0), 'bottom', 'map'), { x: 440, y: 376, w: 208, h: 72, ph: 72 });   // 1.3x, near the map's bottom (below the car's arrow, above the dimmed edge)
+    assert.deepStrictEqual(badgeRect(mapRect('hud', 0), 'bottom', 'hud'), { x: 449, y: 276, w: 172, h: 60, ph: 60 });   // the HUD's, at the map's right edge
 });
 
 /* ---------- drawing and diffs ---------- */
@@ -279,7 +279,41 @@ class FakeCR extends EventEmitter {
         fs.writeFileSync(process.argv[2], big.png());
         console.log('preview: ' + process.argv[2]);
     }
-    console.log(ok + ' checks passed');
+    /* Robert's Waze on cluster (robertnisipeanu/idrive-apps): status.json names the cluster's target and the HUD apart */
+check('status: the original Waze on cluster on the cluster, on the HUD alone, on both, off', () => {
+    const base = { ev: 'status', state: 'showing', target: 'map', cluster: 1, hud: 0, hud_state: 'off', hud_width_pct: 70, hud_x: 0, hud_y: 40 };
+    assert.deepStrictEqual(parseStatus(base), { showing: true, target: 'map', pct: 70, hx: 0, hy: 40 });
+    assert.deepStrictEqual(parseStatus(Object.assign({}, base, { cluster: 0, state: 'off', hud: 1, hud_state: 'showing' })), { showing: true, target: 'hud', pct: 70, hx: 0, hy: 40 });
+    assert.strictEqual(parseStatus(Object.assign({}, base, { hud: 1, hud_state: 'showing' })).target, 'map', 'both: the cluster');
+    assert.strictEqual(parseStatus(Object.assign({}, base, { state: 'idle', hud: 1, hud_state: 'starting' })).showing, false);
+    // the older build's form still reads
+    assert.deepStrictEqual(parseStatus({ state: 'showing', target: 'map+hud', hud_width_pct: 0 }), { showing: true, target: 'map', pct: 0, hx: 0, hy: 0 });
+    assert.strictEqual(parseStatus({ state: 'showing', target: 'hud', hud_width_pct: 60 }).target, 'hud');
+});
+check('the HUD map moved by its offset: the panel moves with it, held inside the HUD', () => {
+    const a = mapRect('hud', 70), b = mapRect('hud', 70, 0, 40), c = mapRect('hud', 70, 0, 900);
+    assert.strictEqual(b.y, a.y + 40); assert.strictEqual(b.x, a.x);
+    assert.strictEqual(c.y + c.h, 480, 'held inside');
+    assert.deepStrictEqual(mapRect('map', 0, 50, 50), mapRect('map', 0), 'the cluster map has no offset');
+    assert.strictEqual(badgeRect(b, 'bottom', 'hud', 1).y, badgeRect(a, 'bottom', 'hud', 1).y + 40);
+});
+check('the thin kW bar: in a strip under the panel, the panel where it was, the layer that much taller', () => {
+    const r = mapRect('map', 0), off = badgeRect(r, 'bottom', 'map', 2, true), on = badgeRect(r, 'bottom', 'map', 2, true, true);
+    const u = underStrip(off.ph);
+    assert.strictEqual(on.ph, off.ph); assert.strictEqual(on.h, off.h + u.total); assert.strictEqual(on.y + on.h, off.y + off.h, 'its bottom where the panel\'s was');
+    // drawn: nothing of the bar inside the panel's own rows, all of it in the strip
+    const { Canvas } = require(path.join(ROOT, 'kit', 'runtime', 'canvas'));
+    const t = require(path.join(ROOT, 'kit', 'runtime', 'themes')).theme('m_tricolour');
+    const cv = new Canvas(on.w, on.h), plain = new Canvas(on.w, on.h);
+    const ex = [{ label: 'OIL', text: '201°' }, { label: 'COOL', text: '203°' }];
+    drawBadge(cv, t, null, 100, 50, ex, 0, { kw: 30 }, on.ph);
+    drawBadge(plain, t, null, 100, 50, ex, 0, null, on.ph);
+    const px = (c, x, y) => Array.from(c.d.slice((y * c.w + x) * 4, (y * c.w + x) * 4 + 4)).join(',');
+    let inPanel = 0, inStrip = 0;
+    for (let y = 0; y < on.h; y++) for (let x = 0; x < on.w; x++) if (px(cv, x, y) !== px(plain, x, y)) { if (y < on.ph) inPanel++; else inStrip++; }
+    assert.strictEqual(inPanel, 0, 'the bar inside the panel'); assert(inStrip > 50, 'the bar drawn under it: ' + inStrip);
+});
+console.log(ok + ' checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
 
 function blend(dst, src, ox, oy) {
