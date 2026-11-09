@@ -16,6 +16,11 @@
 > from the original, [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps),
 > one of the MGU Store's own sources, so the Store lists each once and installs the tools from there.
 >
+> In this fork, eDrive Live writes each battery power reading for Cluster Info and Cluster Layouts the moment it
+> reads it, and both watch for it, so the kW on the cluster is a read behind rather than up to a second; its
+> Economy page also shows the electric consumption of the drive (mi/kWh, kWh/100 mi) from its own power reads,
+> whether or not the onboard computer answers.
+>
 > **License.** This fork is GPL-3.0-or-later ([`LICENSE`](LICENSE)): anyone who distributes it, or a changed
 > version, must make its full source available under the same license. Code from the original project is also
 > available under its MIT license ([`LICENSE-MIT`](LICENSE-MIT)), which stays with it; the license section

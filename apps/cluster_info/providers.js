@@ -83,14 +83,29 @@ function startProviders(log, opts) {
             fs.renameSync(tmp, f);
         } catch (e) { /* the folder went: made again next time */ ready = false; }
     }
+    /* A provider's new file is seen at once (the folder watched: a rename over the file), not at the next scan;
+     * the scan every scanMs stays for a folder that can't be watched. */
+    let watcher = null, pending = false;
+    const soon = () => {
+        if (pending) return;
+        pending = true;
+        setImmediate(() => { pending = false; scan(); if (opts.onChange) opts.onChange(); });
+    };
+    function watchDir() {
+        if (watcher || !ready || (opts.watch === undefined ? !!opts.setInterval : !opts.watch)) return;   // (tests with their own timers: unwatched)
+        try {
+            watcher = fs.watch(dir, (ev, name) => { if (!name || (/\.json$/.test(name) && name !== WANTED)) soon(); });
+            watcher.on('error', () => { try { watcher.close(); } catch (e) { /* gone */ } watcher = null; });
+        } catch (e) { watcher = null; }
+    }
     const si = opts.setInterval || setInterval;
-    const timer = si(scan, opts.scanMs || 250);
-    scan();
+    const timer = si(() => { scan(); watchDir(); }, opts.scanMs || 250);
+    scan(); watchDir();
     return {
         power, value, want, scan,
         /** For the status page: the providers now, { id: app name }. */
         list: () => { const o = {}; Object.keys(entries).forEach((id) => { o[id] = entries[id].app || id; }); return o; },
-        stop: () => (opts.clearInterval || clearInterval)(timer),
+        stop: () => { (opts.clearInterval || clearInterval)(timer); if (watcher) { watcher.close(); watcher = null; } },
     };
 }
 

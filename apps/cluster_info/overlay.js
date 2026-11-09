@@ -22,7 +22,8 @@ const { Canvas, withAlpha } = require('./kit/canvas');
 const G = require('./kit/gauges');
 
 const STATUS = process.env.WOC_STATUS || '/run/waze-on-cluster/status.json';   // (the variable: tests)
-const UPDATE_MS = 250;            // the badge redrawn at most this often (4 / s)
+const UPDATE_MS = 250;            // the badge redrawn at least this often while up (the clock, the theme)
+const FRAME_MS = 16;              // ... and within a frame of a new reading (kW, a value): 60 / s at most
 const POLL_MS = 1000;             // status.json read this often (and on every change it is watched for)
 const GO = '#2fd27a';
 const TEX = { w: 1088, h: 480 };  // the map's picture (waze-on-cluster tex_size)
@@ -317,7 +318,7 @@ function startOverlay(ctx, lv, opts) {
         return map.showing ? { target: map.target, pct: map.pct, hx: map.hx, hy: map.hy } : null;
     };
     let CR = opts.ClusterRender;
-    let cr = null, ref = 0, geo = '', cv = null, last = null, visible = false, lastT = 0;
+    let cr = null, ref = 0, geo = '', cv = null, last = null, visible = false, lastT = 0, lastKey = '';
     let map = { showing: false, target: null, pct: 0, hx: 0, hy: 0 }, statusText = '';
     let warned = '';
     const warnOnce = (m) => { if (m !== warned) { warned = m; log.warn('map overlay: ' + m); } };
@@ -398,8 +399,10 @@ function startOverlay(ctx, lv, opts) {
         const op = place().target === 'hud' ? hudOpacity() : 1;
         if (op !== opacity) { opacity = op; cr.set(ref, { opacity }); }
         const tm = now();
-        if (visible && tm - lastT < UPDATE_MS - 40) return undefined;    // (the draw timer's jitter)
-        lastT = tm;
+        // a new reading drawn at once (the next frame); otherwise only every UPDATE_MS
+        const key = (pw ? Math.round(pw.kw * 10) + (pw.old ? 'o' : '') + (pw.bar ? 'b' : '') : '') + '|' + extras.map((e) => e.text).join('|') + '|' + JSON.stringify(under || null);
+        if (visible && key === lastKey && tm - lastT < UPDATE_MS - 40) return undefined;    // (the draw timer's jitter)
+        lastT = tm; lastKey = key;
         const lim = (lv.limits && lv.limits()) || {};
         const outMax = G.isNum(lim.outMax) && lim.outMax > 0 ? lim.outMax : 100, inMax = G.isNum(lim.inMax) && lim.inMax > 0 ? lim.inMax : outMax * 0.5;
         // the kW meter after the values in slots before its own (values without a reading are left out)
@@ -428,7 +431,7 @@ function startOverlay(ctx, lv, opts) {
     };
     const si = opts.setInterval || setInterval, ci = opts.clearInterval || clearInterval;
     const poll = si(() => { watch(); readStatus(); }, POLL_MS);
-    const draw = si(() => { if (where() !== 'off' && place()) { lv.keepFast(); tick(); } else hide(); }, UPDATE_MS);
+    const draw = si(() => { if (where() !== 'off' && place()) { lv.keepFast(); tick(); } else hide(); }, FRAME_MS);
     watch();
     readStatus();
     process.on('exit', () => { hide(); });

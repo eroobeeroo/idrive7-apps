@@ -117,10 +117,16 @@ mgu.run({
         watch('de.bmw.infrastructure.EnvironmentalInformation', {
             ExteriorTemperature: (v) => { const a = sc('ambient', v.temperatureExterior); if (a !== null) live.ambient = a; },
         }, 'ambient');
+        // the distance this drive, from the speed (the Economy page's electric figure: the battery's net energy
+        // over it, from this app's own reads, which need nothing from the onboard computer)
+        const drive = { km: 0, t: 0 };
         watch('de.bmw.infotainment.vehicle.Vehicle2', {
             statusCarSpeed2: (v) => {
                 const k = v.speedVehicleCentreOfGravity;
                 live.speed = k === 65535 || k == null ? null : k * 0.015625;
+                const tNow = Date.now();
+                if (G.isNum(live.speed) && drive.t && tNow - drive.t < 5000) drive.km += live.speed * (tNow - drive.t) / 3600000;
+                drive.t = G.isNum(live.speed) ? tNow : 0;
                 if (G.isNum(live.speed) && live.speed > 1) { live.standSince = 0; if (!driving()) log.info('in use again (moving)'); lastActiveT = Date.now(); }
                 else if (G.isNum(live.speed) && !live.standSince) live.standSince = Date.now();
             },
@@ -390,6 +396,7 @@ mgu.run({
         const trace = [], climTrace = [], tempTrace = [];
         const push = (arr, keep, v) => { const now = Date.now(); arr.push([now, v]); while (arr.length && now - arr[0][0] > keep * 1000) arr.shift(); };
         let iFail = 0, iTry = 0, vTick = 0, iOk = false, pMiss = 0, pLogT = 0;
+        let provider = null;             // Cluster Info's share (below)
         const KW_KEEP = 15000;           // a missed power read: the last value stays (dimmed) this long
         function onPower(kw, now) {
             // a gap in the power readings while in use: say what held the link
@@ -411,6 +418,7 @@ mgu.run({
             live.kw = kw; live.kwT = now;
             push(trace, TRACE_S, kw);
             learnBaseline(kw, now);
+            if (provider) provider.kick();   // Cluster Info's and the layouts' kW: this reading, now
         }
         async function readPower() {
             // a car without the current identifier: only every 30 s. One that has answered keeps being asked
@@ -859,23 +867,36 @@ mgu.run({
 
         /* The Economy page: the chosen mode's average, large; above the car's cap (about 90 mpg) our own figure
          * too; every mode seen since, with ours beside the car's. */
+        /** This drive's electric consumption: the battery's net energy out (out minus regen) over the distance,
+         * { miKwh, line }. */
+        function electricDrive(d) {
+            const tp = d.demo ? { out: 2.84, regen: 0.61 } : trip, km = d.demo ? 14.2 : drive.km;
+            const kwh = tp.out - tp.regen, mi = km / ECON.KM_PER_MI;
+            const miKwh = mi >= 0.3 && kwh > 0.05 ? mi / kwh : null;
+            const line = 'Electric this drive  ' + (mi < 0.3 ? 'from a few tenths of a mile' : G.fmt(kwh, 2) + ' kWh net over ' + G.fmt(mi, 1) + ' mi'
+                + (miKwh !== null ? '  =  ' + G.fmt(miKwh, 1) + ' mi/kWh, ' + G.fmt(100 / miKwh, 0) + ' kWh/100 mi' : kwh <= 0.05 ? '  (more regained than used)' : ''));
+            return { miKwh, line };
+        }
         function renderEconomy(cv, t, d) {
             const bc = econLive.bc;
             G.panel(cv, t, 24, 44, 760, 468, 'Average economy');
             const fmtMpg = (m) => (m === null || m === undefined ? '--' : m === Infinity || m > 999 ? '999+' : G.fmt(m, m < 100 ? 1 : 0));
+            const el = electricDrive(d);
             if (!bc) {
-                // no mode from the onboard computer (yet): its plain average if it sends that, and ours since this app
-                const a = econLive.avgOnly, mine = econ.figure(ECON.APP);
-                const big = a ? G.fmt(a.avg, 1) : mine && mine.mpg !== null ? fmtMpg(mine.mpg) : '--';
-                cv.text(a ? 'ONBOARD COMPUTER' : 'SINCE THIS APP', 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
+                // no mode from the onboard computer (yet): its plain average if it sends that, ours since this app,
+                // else the electric figure of this drive (the battery's own reads: always there)
+                const a = econLive.avgOnly, mine = econ.figure(ECON.APP), fuelOurs = mine && mine.mpg !== null;
+                const big = a ? G.fmt(a.avg, 1) : fuelOurs ? fmtMpg(mine.mpg) : el.miKwh !== null ? G.fmt(el.miKwh, 1) : '--';
+                cv.text(a ? 'ONBOARD COMPUTER' : fuelOurs ? 'SINCE THIS APP' : 'THIS DRIVE, ELECTRIC', 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
                 cv.text(big, 404, 250, 130, big === '--' ? t.dim : t.text, { align: 'center', font: 'bold' });
-                cv.text(a ? (a.unit || '').toUpperCase() : 'MPG', 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
+                cv.text(a ? (a.unit || '').toUpperCase() : fuelOurs ? 'MPG' : 'MI/KWH', 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
                 const lines = [
-                    'Ours since this app  ' + (!mine ? 'waiting for the tank and odometer' : mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi'),
+                    el.line,
+                    'Fuel, ours since this app  ' + (!mine ? 'waiting for the tank and odometer' : mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi'),
                     'Onboard computer  ' + ([1, 2, 3].map((n) => 'RL' + n + ' ' + (econLive.seen[n] || 0)).join('  ')) + '  ·  '
                         + Object.keys(sigStatus).filter((k) => /onboard/.test(k)).map((k) => sigStatus[k]).join(' / '),
                 ];
-                lines.forEach((l, i) => cv.text(l, 48, 360 + i * 34, 20, t.text, { font: 'label', literal: true }));
+                lines.forEach((l, i) => cv.text(l, 48, 338 + i * 34, 20, t.text, { font: 'label', literal: true }));
                 cv.text('The mode (Individual, since refuelling...) shows once the onboard computer answers.', 48, 484, 16, t.dim, { font: 'label', literal: true });
             } else {
                 const mine = econ.figure(bc.mode), carMpg = ECON.toMpg(bc.avg, bc.unitNum);
@@ -892,14 +913,17 @@ mgu.run({
                     'Distance  ' + (bc.km === null ? '--' : G.fmt(bc.km, 0)) + (bc.eKm !== null && bc.km ? '  ·  electric ' + Math.round(100 * bc.eKm / Math.max(1, bc.km)) + ' %' : '')
                         + (bc.speedAvg !== null ? '  ·  avg speed ' + G.fmt(bc.speedAvg, 0) : '') + (bc.resetAt ? '  ·  since ' + bc.resetAt : ''),
                 ];
-                lines.forEach((l, i) => cv.text(l, 48, 360 + i * 34, 20, i === 1 && useMine ? GO : t.text, { font: 'label', literal: true }));
+                lines.push(el.line);
+                lines.forEach((l, i) => cv.text(l, 48, 338 + i * 34, 20, i === 1 && useMine ? GO : t.text, { font: 'label', literal: true }));
                 cv.text('Change the mode on the cluster (the onboard computer menu): this page follows it.', 48, 484, 16, t.dim, { font: 'label', literal: true });
             }
             // ---- every mode seen
             G.panel(cv, t, 800, 44, 776, 468, 'Modes');
-            ['MODE', 'CAR', 'OURS', 'SEEN'].forEach((h, i) => cv.text(h, [824, 1180, 1340, 1552][i], 100, 16, t.dim, { font: 'bold', spacing: 1.2, align: i ? 'right' : 'left' }));
-            Object.keys(ECON.MODE_NAMES).filter((m) => econLive.byMode[m] || econ.state()[m]).forEach((m, i) => {
-                const b = econLive.byMode[m] || (econ.state()[m] && econ.state()[m].last) || {}, f = econ.figure(m), y = 146 + i * 46;
+            ['MODE', 'CAR', 'OURS', 'SEEN'].forEach((h, i) => cv.text(h, [824, 1180, 1340, 1552][i], 122, 16, t.dim, { font: 'bold', spacing: 1.2, align: i ? 'right' : 'left' }));
+            const modes = Object.keys(ECON.MODE_NAMES).filter((m) => econLive.byMode[m] || econ.state()[m]);
+            if (!modes.length) cv.text('None yet: each mode shows here once the onboard computer or our own count has it.', 824, 170, 18, t.dim, { font: 'label', literal: true });
+            modes.forEach((m, i) => {
+                const b = econLive.byMode[m] || (econ.state()[m] && econ.state()[m].last) || {}, f = econ.figure(m), y = 164 + i * 44;
                 if (bc && m === bc.mode) cv.roundRect(812, y - 30, 752, 42, 8, withAlpha(t.track, 0.6));
                 cv.text(ECON.MODE_NAMES[m], 824, y, 22, t.text, { font: 'bold' });
                 cv.text(typeof b.avg === 'number' ? G.fmt(b.avg, 1) + (b.capped ? '+' : '') : '--', 1180, y, 22, t.text, { font: 'bold', align: 'right' });
@@ -1350,7 +1374,6 @@ mgu.run({
         }
 
         /* ---------- Cluster Info (apps/cluster_info): the power and temperatures for its panel over the Waze map ---------- */
-        let provider = null;
         try {
             provider = require('./provider').startProvider(log, {
                 on: () => settings.get('clusterInfo') !== 'off',

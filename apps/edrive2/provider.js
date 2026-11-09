@@ -5,7 +5,8 @@
  * limits), the battery's charge (%) and the battery and engine oil temperatures.
  *
  * Cluster Info writes wanted.json in the folder while its panel is up; only then does eDrive Live read fast
- * (keepFast) and write its file, 4 times a second, so the car can sleep otherwise.
+ * (keepFast) and write its file: at once on each new power reading (kick(), so the cluster's kW is a read behind,
+ * not a quarter second), and 4 times a second for the rest, so the car can sleep otherwise.
  */
 const fs = require('fs');
 const path = require('path');
@@ -34,6 +35,7 @@ function startProvider(log, src, opts) {
         } catch (e) { wanted = null; }
         return wanted;
     }
+    let lastWrite = 0;
     function tick() {
         const w = src.on() ? readWanted() : null;
         status.wanted = !!w;
@@ -54,14 +56,16 @@ function startProvider(log, src, opts) {
         try {
             fs.writeFileSync(tmp, JSON.stringify(out), { mode: 0o644 });
             fs.renameSync(tmp, f);
-            writing = true; status.written = now(); status.error = null; failed = false;
+            writing = true; lastWrite = status.written = now(); status.error = null; failed = false;
         } catch (e) {
             status.error = e.message;
             if (!failed) { failed = true; log.warn('cluster info: ' + e.message); }
         }
     }
     (opts.setInterval || setInterval)(tick, TICK_MS);
-    return { status: () => Object.assign({}, status), wanted: () => readWanted(), _tick: tick };
+    /** A new power reading: written now (at most every 8 ms; only while wanted, as tick()). */
+    const kick = () => { if (writing && now() - lastWrite >= 8) tick(); };
+    return { status: () => Object.assign({}, status), wanted: () => readWanted(), kick, _tick: tick };
 }
 
 module.exports = { startProvider };

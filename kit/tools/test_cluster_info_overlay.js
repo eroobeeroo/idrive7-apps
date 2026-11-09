@@ -120,13 +120,14 @@ class FakeCR extends EventEmitter {
     });
 
     let n = cr.log.length;
-    t += 100; kw = 40; ov._tick();
-    check('within 250 ms of the last: no update', () => assert.strictEqual(cr.log.length, n));
-    t += 300; ov._tick();
-    check('a new value: only the rectangles that changed', () => {
+    t += 100; ov._tick();
+    check('nothing new within 250 ms of the last: no update', () => assert.strictEqual(cr.log.length, n));
+    t += 16; kw = 40; ov._tick();
+    check('a new value: drawn at once (the next frame), only the rectangles that changed', () => {
         const e = cr.log.slice(n).find((x) => x[0] === 'pixels');
         assert(e && Array.isArray(e[2]) && e[2].length >= 1);
     });
+    t += 300;
     n = cr.log.length;
     t += 300; ov._tick();
     check('the same value again: nothing sent', () => assert.strictEqual(cr.log.length, n));
