@@ -134,6 +134,43 @@ mgu.run({
             },
         }, 'rpm and oil temperature');
 
+        /* ---------- the onboard computer's average economy (Economy page) ----------
+         * The car's reset logic sends the chosen mode's figures (ResetLogic3, else 2, else 1: whichever answers);
+         * the tank's litres and the odometer give our own, uncapped figure (economy.js). Read always (the car's
+         * own cadence), so the counts cover every drive. */
+        const ECON = require('./economy');
+        const econ = new ECON.Tracker(st.econ);
+        st.econ = econ.state();
+        const econLive = { bc: null, src: null, byMode: {}, raw: null, tank: null, odo: null };
+        let econSavedT = 0;
+        const econNote = () => {
+            econ.note(econLive.bc, econLive.tank, econLive.odo);
+            if (econLive.bc && econLive.bc.mode) econLive.byMode[econLive.bc.mode] = econLive.bc;
+            if (Date.now() - econSavedT > 30000) { econSavedT = Date.now(); save(); }
+        };
+        const onBc = (src) => (v) => {
+            // the newest service that answers is the one used (3 before 2 before 1)
+            const rank = { 3: 3, 2: 2, 1: 1 }[src];
+            if (econLive.src && econLive.src > rank) return;
+            const bc = ECON.decode(v);
+            if (!bc) return;
+            econLive.src = rank;
+            econLive.raw = JSON.stringify(v).slice(0, 600);
+            if (!econLive.bc || econLive.bc.mode !== bc.mode || econLive.bc.avg !== bc.avg) log.info('economy: ' + bc.modeName + ' ' + bc.avg + ' ' + (bc.unit || '?') + (bc.capped ? ' (capped)' : '') + ' raw ' + JSON.stringify(bc.raw));
+            econLive.bc = bc;
+            econNote();
+        };
+        watch('de.bmw.infotainment.resetlogic.ResetLogic3', { bcDataAll: onBc(3) }, 'onboard computer (reset logic 3)');
+        watch('de.bmw.infotainment.resetlogic.ResetLogic2', { bcDataAll: onBc(2) }, 'onboard computer (reset logic 2)');
+        watch('de.bmw.infotainment.resetlogic.ResetLogic', { bcDataAll: onBc(1) }, 'onboard computer (reset logic)');
+        // the tank and the odometer: KombiIF statusRangeTankStatus, subscribed with the power distribution below
+        const onTank = (v) => {
+            const lv = v && v.fluidLevelFuelTank, od = v && v.mileageKilometre;
+            if (typeof lv === 'number' && lv > 0 && lv < 255) econLive.tank = lv;
+            if (typeof od === 'number' && od > 0 && od < 4294967295) econLive.odo = od;
+            econNote();
+        };
+
         /* ---------- why the engine runs ----------
          * The car's own reason electric driving is not possible (FES statusElectricVehicleDriveSystemState:
          * actualValueReasonPreventionElectricVehicle, in this G05 PHEV's catalog): heating, a low battery, the
@@ -215,7 +252,8 @@ mgu.run({
         }, 'steering wheel', { pollMs: 15000 });
         watch('de.bmw.infotainment.KombiIF', {
             statusDisplayElectricalPowerDistribution: (v) => { rawSeen('distribution', v); live.pd = entries(v, 'displayRepartitionDriveElectricPower')[0] || null; },
-        }, 'power distribution', { pollMs: 15000 });
+            statusRangeTankStatus: onTank,
+        }, 'power distribution, tank and odometer', { pollMs: 15000 });
         const battTemp = (raw) => { const v = sc('batteryTemp', raw); return v !== null && v > -30 && v < 70 ? v : null; };
         watch('de.bmw.infotainment.drivingexcitement.Efficiencytainment2', {
             statusBatteryTemperature: (v) => {
@@ -745,8 +783,8 @@ mgu.run({
         }
 
         /* ---------- pages ---------- */
-        const pages = () => ['power', 'battery', 'cells', 'climate'].concat(settings.get('diagPage') ? ['diag', 'scan', 'signals'] : []);
-        const NAMES = { power: 'Power', battery: 'Battery', cells: 'Cells', climate: 'Climate', diag: 'Diagnostics', scan: 'Scan', signals: 'Signals' };
+        const pages = () => ['power', 'economy', 'battery', 'cells', 'climate'].concat(settings.get('diagPage') ? ['diag', 'scan', 'signals'] : []);
+        const NAMES = { power: 'Power', economy: 'Economy', battery: 'Battery', cells: 'Cells', climate: 'Climate', diag: 'Diagnostics', scan: 'Scan', signals: 'Signals' };
         let page = 0;
         ui.onClick('BTN_PAGE', () => { touched(); page = (page + 1) % pages().length; return render(); });
         ui.onClick('BTN_PREV', () => { touched(); const n = pages().length; page = (page + n - 1) % n; return render(); });
@@ -803,6 +841,49 @@ mgu.run({
             cv.noclip();
             cv.text(secs >= 120 ? Math.round(secs / 60) + ' min ago' : secs + ' s ago', x, y + h + 22, 16, t.dim);
             cv.text('now', x + w, y + h + 22, 16, t.dim, { align: 'right' });
+        }
+
+        /* The Economy page: the chosen mode's average, large; above the car's cap (about 90 mpg) our own figure
+         * too; every mode seen since, with ours beside the car's. */
+        function renderEconomy(cv, t, d) {
+            const bc = econLive.bc;
+            G.panel(cv, t, 24, 44, 760, 468, 'Average economy');
+            const fmtMpg = (m) => (m === null || m === undefined ? '--' : m === Infinity || m > 999 ? '999+' : G.fmt(m, m < 100 ? 1 : 0));
+            if (!bc) {
+                cv.text('Waiting for the onboard computer', 404, 250, 26, t.dim, { align: 'center', font: 'bold' });
+                cv.text(Object.keys(sigStatus).filter((k) => /onboard|tank/.test(k)).map((k) => k + ': ' + sigStatus[k]).join('   ') || 'subscribing', 404, 290, 16, t.dim, { align: 'center', font: 'label' });
+            } else {
+                const mine = econ.figure(bc.mode), carMpg = ECON.toMpg(bc.avg, bc.unitNum);
+                cv.text(bc.modeName.toUpperCase(), 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
+                // the big number: the car's own, unless it is at its cap and ours covers the mode
+                const useMine = bc.capped && mine && mine.mpg !== null && mine.full;
+                const big = useMine ? fmtMpg(mine.mpg) : bc.capped ? fmtMpg(bc.avg) + '+' : bc.avg === null ? '--' : G.fmt(bc.avg, 1);
+                cv.text(big, 404, 250, 130, useMine ? GO : t.text, { align: 'center', font: 'bold' });
+                cv.text(useMine ? 'MPG  (OURS: THE CAR STOPS AT ' + fmtMpg(bc.avg) + ')' : (bc.unit || '').toUpperCase(), 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
+                const lines = [
+                    'Car\'s figure  ' + (bc.avg === null ? '--' : G.fmt(bc.avg, 1) + ' ' + (bc.unit || '')) + (bc.capped ? '  (its top)' : '') + (bc.unitNum !== 3 && carMpg !== null ? '  =  ' + fmtMpg(carMpg) + ' mpg' : ''),
+                    'Ours  ' + (!mine || mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi')
+                        + (mine && !mine.full ? '  ·  saw ' + Math.round(mine.cover * 100) + ' % of this mode' : ''),
+                    'Distance  ' + (bc.km === null ? '--' : G.fmt(bc.km, 0)) + (bc.eKm !== null && bc.km ? '  ·  electric ' + Math.round(100 * bc.eKm / Math.max(1, bc.km)) + ' %' : '')
+                        + (bc.speedAvg !== null ? '  ·  avg speed ' + G.fmt(bc.speedAvg, 0) : '') + (bc.resetAt ? '  ·  since ' + bc.resetAt : ''),
+                ];
+                lines.forEach((l, i) => cv.text(l, 48, 360 + i * 34, 20, i === 1 && useMine ? GO : t.text, { font: 'label', literal: true }));
+                cv.text('Change the mode on the cluster (the onboard computer menu): this page follows it.', 48, 484, 16, t.dim, { font: 'label', literal: true });
+            }
+            // ---- every mode seen
+            G.panel(cv, t, 800, 44, 776, 468, 'Modes');
+            ['MODE', 'CAR', 'OURS', 'SEEN'].forEach((h, i) => cv.text(h, [824, 1180, 1340, 1552][i], 100, 16, t.dim, { font: 'bold', spacing: 1.2, align: i ? 'right' : 'left' }));
+            Object.keys(ECON.MODE_NAMES).filter((m) => econLive.byMode[m] || econ.state()[m]).forEach((m, i) => {
+                const b = econLive.byMode[m] || (econ.state()[m] && econ.state()[m].last) || {}, f = econ.figure(m), y = 146 + i * 46;
+                if (bc && m === bc.mode) cv.roundRect(812, y - 30, 752, 42, 8, withAlpha(t.track, 0.6));
+                cv.text(ECON.MODE_NAMES[m], 824, y, 22, t.text, { font: 'bold' });
+                cv.text(typeof b.avg === 'number' ? G.fmt(b.avg, 1) + (b.capped ? '+' : '') : '--', 1180, y, 22, t.text, { font: 'bold', align: 'right' });
+                cv.text(f && f.mpg !== null ? fmtMpg(f.mpg) : '--', 1340, y, 22, f && f.full ? GO : t.dim, { font: 'bold', align: 'right' });
+                cv.text(f ? Math.round(f.cover * 100) + ' %' : '--', 1552, y, 18, t.dim, { align: 'right' });
+            });
+            cv.text('OURS: fuel used (the tank, whole litres) over the odometer, from each mode\'s reset while this app ran;', 824, 440, 15, t.dim, { font: 'label', literal: true });
+            cv.text('SEEN: how much of the mode\'s distance that covers. Tank ' + (econLive.tank === null ? '--' : econLive.tank + ' L') + '  ·  odometer '
+                + (econLive.odo === null ? '--' : G.fmt(econLive.odo, 0) + ' km'), 824, 462, 15, t.dim, { font: 'label', literal: true });
         }
 
         function renderPower(cv, t, d) {
@@ -1120,6 +1201,7 @@ mgu.run({
             // what Cluster Info's panel gets from eDrive Live, and whether it works
             const ps = provider ? provider.status() : null;
             const lines = [
+                'Onboard computer: ' + (econLive.raw ? 'reset logic ' + econLive.src + '  ' + econLive.raw.slice(0, 150) : 'nothing yet (' + ['3', '2', ''].map((n) => sigStatus['onboard computer (reset logic' + (n ? ' ' + n : '') + ')'] || 'waiting').join(' / ') + ')'),
                 'Cluster Info: ' + (settings.get('clusterInfo') === 'off' ? 'off (setting)' : !ps ? 'not started' : ps.wanted ? 'its panel is up, values sent ' + (ps.error ? '- error: ' + ps.error : (Date.now() - ps.written < 2000 ? 'now' : 'not yet')) : 'its panel is not up (or Cluster Info is not installed)')
                     + '   ·   Oil temperature: ' + (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? fmtT(live.oil) + ' from the ' + live.oilSrc : 'none (' + (sigStatus['rpm and oil temperature'] || 'waiting') + ')'),
             ];
@@ -1145,7 +1227,7 @@ mgu.run({
             const cv = ctx.canvas(W, H).clear(t.bg);
             const pg = pages();
             if (page >= pg.length) page = 0;
-            ({ power: renderPower, battery: renderBattery, cells: renderCells, climate: renderClimate, diag: renderDiag, scan: renderScan, signals: renderSignals })[pg[page]](cv, t, d);
+            ({ power: renderPower, economy: renderEconomy, battery: renderBattery, cells: renderCells, climate: renderClimate, diag: renderDiag, scan: renderScan, signals: renderSignals })[pg[page]](cv, t, d);
             G.frame(cv, t, pg.map((p) => NAMES[p]), page, [d.demo && { text: 'DEMO' }]);
             return ui.image('MAIN_GFX', cv);
         }

@@ -1,8 +1,8 @@
 {
   "id": "edrive2",
   "title": "eDrive Live",
-  "description": "Live HV battery power (kW), cell temperatures and voltages, power limits and climate / HVAC power use - set up for the X5 xDrive45e (G05 PHEV)",
-  "version": "1.8.0",
+  "description": "Live HV battery power (kW), cell temperatures and voltages, power limits, climate / HVAC power use, and the onboard computer's average economy for the chosen mode (uncapped above the car's 90 mpg) - set up for the X5 xDrive45e (G05 PHEV)",
+  "version": "1.9.0",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OA9D",
@@ -46,7 +46,8 @@
       "heatingState": "rs"
     },
     "de.bmw.infotainment.KombiIF": {
-      "statusDisplayElectricalPowerDistribution": "rs"
+      "statusDisplayElectricalPowerDistribution": "rs",
+      "statusRangeTankStatus": "rs"
     },
     "de.bmw.infotainment.drivingexcitement.Efficiencytainment2": {
       "statusBatteryTemperature": "rs"
@@ -56,6 +57,15 @@
     },
     "de.bmw.infotainment.drivingexcitement.FES": {
       "statusElectricVehicleDriveSystemState": "rs"
+    },
+    "de.bmw.infotainment.resetlogic.ResetLogic3": {
+      "bcDataAll": "rs"
+    },
+    "de.bmw.infotainment.resetlogic.ResetLogic2": {
+      "bcDataAll": "rs"
+    },
+    "de.bmw.infotainment.resetlogic.ResetLogic": {
+      "bcDataAll": "rs"
     }
   },
   "startWidget": {

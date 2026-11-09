@@ -44,14 +44,15 @@ Module._load = function (req, parent, isMain) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edrive-live-'));
     const S = {};
     SPEC.settings.forEach((s) => { S[s.key] = s.default; });
-    const loops = {}, clicks = {}, warns = [];
+    const loops = {}, clicks = {}, warns = [], handlers = {}, infos = [];
+    const send = (k, v) => (handlers[k] || []).forEach((f) => f(v));
     let widgetDraw = null;
     const ctx = {
         app: {}, ui: { onClick: (id, fn) => { clicks[id] = fn; }, text() {}, image: async () => {} },
         settings: { get: (k) => S[k], onChange() {} },
-        log: { info() {}, warn: (m) => warns.push(m), error: (m, e) => warns.push(m + ' ' + e) },
+        log: { info: (m) => infos.push(m), warn: (m) => warns.push(m), error: (m, e) => warns.push(m + ' ' + e) },
         spec: SPEC, dataDir: dir,
-        signals: { watch: () => Promise.resolve({}) },
+        signals: { watch: (iface, inst, h) => { Object.keys(h).forEach((k) => { (handlers[k] = handlers[k] || []).push(h[k]); }); return Promise.resolve({}); } },
         onTab() {}, hideButton() {}, onScroll() {},
         loop: (name, fps, fn) => { loops[name] = fn; },
         theme: () => themes.theme('m_tricolour'), canvas: (w, h) => new Canvas(w, h),
@@ -72,6 +73,22 @@ Module._load = function (req, parent, isMain) {
         if (widgetDraw) await widgetDraw({ spawnId: 1, big: true, visible: true, w: 384, h: 256 });
     }
     assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), 'no errors drawn: ' + warns.join(' | '));
+
+    /* the Economy page: the onboard computer's chosen mode, the car's figure at its 90 mpg top, ours above it */
+    const declared = [].concat(...Object.keys(SPEC.signals).map((i) => Object.keys(SPEC.signals[i])));
+    ['bcDataAll', 'statusRangeTankStatus'].forEach((k) => assert(declared.indexOf(k) >= 0 && handlers[k], k + ' declared and subscribed'));
+    const bcv = (opt, digit, km, reset) => ({ activeResetLogic: 1, bcUnits: { averageConsumptionCombustion: 'CONSUMPTION_US' }, maxValues: { maxValueAverageConsumptionCombustion: 900 },
+        bcData3: { resetOption: opt, consumptionCombustionAverageDigit: digit, counterDistance: km, counterDistanceEDrive: Math.round(km * 0.8), speedAverage: 340,
+            dateTimeReset: { year: 26, month: 11, day: 9, hour: 8, minute: 0, second: 0 }, dateTimeTrip: {}, msaCounter: {} } });
+    send('statusRangeTankStatus', { fluidLevelFuelTank: 50, mileageKilometre: 20000 });
+    send('bcDataAll', bcv('INDIVIDUAL', 0, 0));                 // reset just now: we see all of it
+    for (let k = 1; k <= 160; k++) send('statusRangeTankStatus', { fluidLevelFuelTank: k < 80 ? 50 : 49, mileageKilometre: 20000 + k });
+    send('bcDataAll', bcv('INDIVIDUAL', 900, 100));             // 100 mi: the car shows its top, 90.0
+    S.demo = 'off';
+    for (let i = 0; i < 12; i++) { await loops.MAIN(); if (clicks.BTN_PAGE) await clicks.BTN_PAGE(); }
+    assert(!warns.some((w) => /TypeError|ReferenceError|is not a function/.test(w)), 'the Economy page draws: ' + warns.join(' | '));
+    assert(infos.some((m) => /^economy: Individual 90 mpg \(capped\)/.test(m)), 'the car\'s capped figure logged: ' + infos.filter((m) => /economy/.test(m)).join(' | '));
+    console.log('ok   Economy: subscribed, tracked from the mode\'s reset, drawn');
     // its requests carry the short waits (the kit's diag.js takes them per request)
     phys = [];
     await FakeDiag.last.physical(7, 0x22, [0xdd, 0x68], 1000, null);
