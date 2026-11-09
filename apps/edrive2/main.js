@@ -141,7 +141,7 @@ mgu.run({
         const ECON = require('./economy');
         const econ = new ECON.Tracker(st.econ);
         st.econ = econ.state();
-        const econLive = { bc: null, src: null, byMode: {}, raw: null, tank: null, odo: null };
+        const econLive = { bc: null, src: null, byMode: {}, raw: null, tank: null, odo: null, avgOnly: null, seen: {}, firstRaw: {} };
         let econSavedT = 0;
         const econNote = () => {
             econ.note(econLive.bc, econLive.tank, econLive.odo);
@@ -151,21 +151,20 @@ mgu.run({
         const onBc = (src) => (v) => {
             // the newest service that answers is the one used (3 before 2 before 1)
             const rank = { 3: 3, 2: 2, 1: 1 }[src];
+            econLive.seen[src] = (econLive.seen[src] || 0) + 1;
+            if (!econLive.firstRaw[src]) { econLive.firstRaw[src] = JSON.stringify(v).slice(0, 400); log.info('economy: reset logic ' + src + ' first value ' + econLive.firstRaw[src]); }
             if (econLive.src && econLive.src > rank) return;
             const bc = ECON.decode(v);
-            if (!bc) return;
+            if (!bc || (!bc.mode && bc.avg === null)) return;   // a shape we can't read: the raw value is in the log
             econLive.src = rank;
             econLive.raw = JSON.stringify(v).slice(0, 600);
             if (!econLive.bc || econLive.bc.mode !== bc.mode || econLive.bc.avg !== bc.avg) log.info('economy: ' + bc.modeName + ' ' + bc.avg + ' ' + (bc.unit || '?') + (bc.capped ? ' (capped)' : '') + ' raw ' + JSON.stringify(bc.raw));
             econLive.bc = bc;
             econNote();
         };
-        watch('de.bmw.infotainment.resetlogic.ResetLogic3', { bcDataAll: onBc(3) }, 'onboard computer (reset logic 3)');
-        watch('de.bmw.infotainment.resetlogic.ResetLogic2', { bcDataAll: onBc(2) }, 'onboard computer (reset logic 2)');
-        watch('de.bmw.infotainment.resetlogic.ResetLogic', { bcDataAll: onBc(1) }, 'onboard computer (reset logic)');
         // the tank and the odometer: KombiIF statusRangeTankStatus, subscribed with the power distribution below
         const onTank = (v) => {
-            const lv = v && v.fluidLevelFuelTank, od = v && v.mileageKilometre;
+            const lv = one(v, 'fluidLevelFuelTank'), od = one(v, 'mileageKilometre');   // plain or wrapped
             if (typeof lv === 'number' && lv > 0 && lv < 255) econLive.tank = lv;
             if (typeof od === 'number' && od > 0 && od < 4294967295) econLive.odo = od;
             econNote();
@@ -266,6 +265,21 @@ mgu.run({
             statusHighVoltageStorage: (v) => { rawSeen('HV storage', v); let x = one(v, 'actualValueVoltageHighVoltageStorage'); if (G.isNum(x) && x > 1500) x /= 10;       // 0.1 V on the X5 45e
                 if (G.isNum(x) && x > 150 && x < 500) { live.lscV = x; live.lscVT = Date.now(); } },
         }, 'HV storage');
+
+        /* the onboard computer last: ResetLogic3's field is the one reliable (TCP) one this app reads, and a
+         * subscription that hangs holds up every one after it. 1 and 2 first; each re-read every 20 s while in
+         * use (a field the car only sends on a change). ResetLogic's simpler averageConsumption is the fallback:
+         * the chosen mode's figure without the mode. */
+        watch('de.bmw.infotainment.resetlogic.ResetLogic', {
+            bcDataAll: onBc(1),
+            averageConsumption: (v) => {
+                const a = ECON.decodeAverage(v);
+                if (!econLive.firstRaw.avg) { econLive.firstRaw.avg = JSON.stringify(v).slice(0, 300); log.info('economy: averageConsumption first value ' + econLive.firstRaw.avg); }
+                if (a && a.avg !== null) econLive.avgOnly = a;
+            },
+        }, 'onboard computer (reset logic)', { pollMs: 20000 });
+        watch('de.bmw.infotainment.resetlogic.ResetLogic2', { bcDataAll: onBc(2) }, 'onboard computer (reset logic 2)', { pollMs: 20000 });
+        watch('de.bmw.infotainment.resetlogic.ResetLogic3', { bcDataAll: onBc(3) }, 'onboard computer (reset logic 3)', { pollMs: 20000 });
 
         /* ---------- UDS: candidates with several fields on one reply ---------- */
         const diag = new Diag(ctx.signals, log);
@@ -850,8 +864,19 @@ mgu.run({
             G.panel(cv, t, 24, 44, 760, 468, 'Average economy');
             const fmtMpg = (m) => (m === null || m === undefined ? '--' : m === Infinity || m > 999 ? '999+' : G.fmt(m, m < 100 ? 1 : 0));
             if (!bc) {
-                cv.text('Waiting for the onboard computer', 404, 250, 26, t.dim, { align: 'center', font: 'bold' });
-                cv.text(Object.keys(sigStatus).filter((k) => /onboard|tank/.test(k)).map((k) => k + ': ' + sigStatus[k]).join('   ') || 'subscribing', 404, 290, 16, t.dim, { align: 'center', font: 'label' });
+                // no mode from the onboard computer (yet): its plain average if it sends that, and ours since this app
+                const a = econLive.avgOnly, mine = econ.figure(ECON.APP);
+                const big = a ? G.fmt(a.avg, 1) : mine && mine.mpg !== null ? fmtMpg(mine.mpg) : '--';
+                cv.text(a ? 'ONBOARD COMPUTER' : 'SINCE THIS APP', 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
+                cv.text(big, 404, 250, 130, big === '--' ? t.dim : t.text, { align: 'center', font: 'bold' });
+                cv.text(a ? (a.unit || '').toUpperCase() : 'MPG', 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
+                const lines = [
+                    'Ours since this app  ' + (!mine ? 'waiting for the tank and odometer' : mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi'),
+                    'Onboard computer  ' + ([1, 2, 3].map((n) => 'RL' + n + ' ' + (econLive.seen[n] || 0)).join('  ')) + '  ·  '
+                        + Object.keys(sigStatus).filter((k) => /onboard/.test(k)).map((k) => sigStatus[k]).join(' / '),
+                ];
+                lines.forEach((l, i) => cv.text(l, 48, 360 + i * 34, 20, t.text, { font: 'label', literal: true }));
+                cv.text('The mode (Individual, since refuelling...) shows once the onboard computer answers.', 48, 484, 16, t.dim, { font: 'label', literal: true });
             } else {
                 const mine = econ.figure(bc.mode), carMpg = ECON.toMpg(bc.avg, bc.unitNum);
                 cv.text(bc.modeName.toUpperCase(), 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });

@@ -16,7 +16,9 @@
 const L_PER_GAL_US = 3.785411784, L_PER_GAL_UK = 4.54609, KM_PER_MI = 1.609344;
 const MODES = { 1: 'INDIVIDUAL', 2: 'REFUEL', 3: 'CHARGE', 4: 'STARTOFDRIVING', 5: 'LONGTERM', 6: 'AVERAGE' };
 const MODE_NAMES = { INDIVIDUAL: 'Individual', REFUEL: 'Since refuelling', CHARGE: 'Since charging', STARTOFDRIVING: 'Since start',
-    LONGTERM: 'Long-term', AVERAGE: 'Average', DEFAULT: 'Default' };
+    LONGTERM: 'Long-term', AVERAGE: 'Average', DEFAULT: 'Default', APP: 'Since this app' };
+/* our own count that needs nothing from the onboard computer: from the first tank and odometer reading on */
+const APP = 'APP';
 /* the car's consumption units (StatusUnitConsumptionBC / BC3) */
 const UNITS = { 1: 'L/100km', 2: 'mpg (UK)', 3: 'mpg', 4: 'km/L', 5: 'kg/100km', 6: 'kg/100mi', 7: 'L/h', 8: 'gal/h', 9: 'gal (UK)/h' };
 const UNIT_NAMES = { CONSUMPTION_KM: 1, CONSUMPTION_UK: 2, CONSUMPTION_US: 3, CONSUMPTION_KML: 4, CONSUMPTION_KGH2_100KM: 5,
@@ -26,6 +28,7 @@ const FULL_COVER = 0.9;        // ... and counted as the mode's whole span when 
 
 /** An enum as a number: its value, or its name looked up (the binding gives either). */
 function enumNum(v, names) {
+    if (v && typeof v === 'object') v = v.value !== undefined ? v.value : v.name;   // { name, value } from some bindings
     if (typeof v === 'number') return v;
     if (typeof v === 'string') {
         if (/^\d+$/.test(v)) return Number(v);
@@ -34,13 +37,21 @@ function enumNum(v, names) {
     return null;
 }
 const pick = (o, keys) => { for (const k of keys) if (o && o[k] !== undefined) return o[k]; return undefined; };
+/** The object holding one of `keys`, however the value arrives (plain, wrapped in the field's name, or deeper). */
+function find(v, keys, depth) {
+    if (!v || typeof v !== 'object' || (depth || 0) > 5) return null;
+    if (keys.some((k) => k in v)) return v;
+    for (const k of Object.keys(v)) { const r = find(v[k], keys, (depth || 0) + 1); if (r) return r; }
+    return null;
+}
 
 /**
  * One bcDataAll value: { mode, modeName, avg, unit, unitNum, max, capped, km, eKm, speedAvg, resetAt, raw }.
  * avg in the car's unit (its digit / 10, the one decimal the cluster shows); null when not given.
  */
 function decode(v) {
-    if (!v || typeof v !== 'object') return null;
+    v = find(v, ['bcData3', 'bcData2', 'bcData', 'bcUnits']);
+    if (!v) return null;
     const bc = v.bcData3 || v.bcData2 || v.bcData || {};
     const units = v.bcUnits || {};
     const modeNum = enumNum(bc.resetOption, MODES);
@@ -63,6 +74,16 @@ function decode(v) {
         speedAvg: ok(bc.speedAverage) ? bc.speedAverage / 10 : null, resetAt, active: v.activeResetLogic,
         raw: { digit, scale: pick(bc, ['consumptionCombustionAverageScale']), max: maxRaw, option: bc.resetOption, unit: pick(units, ['averageConsumptionCombustion', 'consumption']) },
     };
+}
+
+/** ResetLogic.averageConsumption (the older, simpler field): { avg, unitNum, unit } or null. Its figure is the
+ * chosen mode's average, without the mode. */
+function decodeAverage(v) {
+    v = find(v, ['consumptionCombustionCurrentDigit', 'combustionUnit']);
+    if (!v) return null;
+    const d = v.consumptionCombustionCurrentDigit, unitNum = enumNum(v.combustionUnit, UNIT_NAMES);
+    const avg = typeof d === 'number' && d >= 0 && d < 65535 ? d / 10 : null;
+    return { avg, unitNum, unit: UNITS[unitNum] || null };
 }
 
 /** A consumption in one unit as US mpg (null where it can't be). */
@@ -94,8 +115,10 @@ class Tracker {
         Object.keys(this.s).forEach((m) => {
             const e = this.s[m];
             if (lv !== null) { e.litres += Tracker.used(e.lastLevel, lv); e.lastLevel = lv; }
-            if (od !== null) e.odo = od;
+            if (od !== null) { e.odo = od; if (typeof e.odoStart !== 'number') e.odoStart = od; }
         });
+        // ours since this app first saw the tank and the odometer: needs no mode from the car
+        if (!this.s[APP] && (lv !== null || od !== null)) this.s[APP] = { resetAt: null, startKm: 0, odoStart: od, odo: od, litres: 0, lastLevel: lv };
         if (!bc || !bc.mode) return;
         let e = this.s[bc.mode];
         if (!e || (bc.resetAt && e.resetAt !== bc.resetAt) || (typeof bc.km === 'number' && typeof e.startKm === 'number' && bc.km + 0.5 < e.startKm)) {
@@ -111,9 +134,9 @@ class Tracker {
         const km = e.odo - e.odoStart;
         const total = e.last && typeof e.last.km === 'number' ? e.last.km : null;
         // the mode's distance in the car's unit (km or mi): ours as a share of it
-        const cover = total && total > 0 ? Math.min(1, (typeof e.startKm === 'number' ? (total - e.startKm) / total : 0)) : (e.startKm === 0 ? 1 : 0);
+        const cover = mode === APP ? 1 : total && total > 0 ? Math.min(1, (typeof e.startKm === 'number' ? (total - e.startKm) / total : 0)) : (e.startKm === 0 ? 1 : 0);
         return { mpg: km >= MIN_KM ? mpgOf(e.litres, km) : null, litres: e.litres, km, cover, full: cover >= FULL_COVER };
     }
 }
 
-module.exports = { decode, toMpg, mpgOf, Tracker, MODES, MODE_NAMES, UNITS, L_PER_GAL_US, KM_PER_MI };
+module.exports = { decode, decodeAverage, find, APP, toMpg, mpgOf, Tracker, MODES, MODE_NAMES, UNITS, L_PER_GAL_US, KM_PER_MI };

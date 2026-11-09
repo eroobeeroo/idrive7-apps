@@ -30,6 +30,23 @@ check('ResetLogic (1): its older shape', () => {
     assert.strictEqual(b.mode, 'INDIVIDUAL'); assert.strictEqual(b.avg, 6.5); assert.strictEqual(b.unit, 'L/100km');
     assert(Math.abs(E.toMpg(6.5, 1) - 36.19) < 0.01, 'L/100km to mpg');
 });
+check('wrapped as the binding may hand it over: in the field\'s name, or deeper; enums as { name, value }', () => {
+    const b = E.decode({ bcDataAll: v3({ opt: { name: 'REFUEL', value: 2 }, digit: 412, km: 230 }) });
+    assert.strictEqual(b.mode, 'REFUEL'); assert.strictEqual(b.avg, 41.2);
+    assert.strictEqual(E.decode({ value: { x: v3({ opt: 1, digit: 300, km: 1 }) } }).mode, 'INDIVIDUAL');
+    assert.strictEqual(E.decode({ nothing: 1 }), null);
+});
+check('ResetLogic.averageConsumption: the figure without the mode', () => {
+    const a = E.decodeAverage({ averageConsumption: { consumptionCombustionCurrentDigit: 385, combustionUnit: 'CONSUMPTION_US' } });
+    assert.strictEqual(a.avg, 38.5); assert.strictEqual(a.unitNum, 3); assert.strictEqual(a.unit, 'mpg');
+});
+check('ours since this app: from the tank and odometer alone, no mode needed', () => {
+    const T = new E.Tracker();
+    T.note(null, 40, 10000); T.note(null, 39, 10060); T.note(null, 38, 10130);
+    const f = T.figure(E.APP);
+    assert.strictEqual(f.litres, 2); assert.strictEqual(f.km, 130); assert(f.full);
+    assert(Math.abs(f.mpg - E.mpgOf(2, 130)) < 1e-9);
+});
 check('units to US mpg', () => {
     assert(Math.abs(E.toMpg(50, 2) - 41.63) < 0.01, 'UK mpg'); assert.strictEqual(E.toMpg(40, 3), 40); assert(Math.abs(E.toMpg(15, 4) - 35.28) < 0.01, 'km/L');
     assert(Math.abs(E.mpgOf(3.785411784, 160.9344) - 100) < 1e-9, '1 gal over 100 mi');
