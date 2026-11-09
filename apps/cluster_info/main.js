@@ -141,7 +141,13 @@ mgu.run({
                     return { text: metric ? live.boost.toFixed(2) : (live.boost * 14.5038).toFixed(1), label: metric ? 'BOOST bar' : 'BOOST psi', src: 'car signal (sport display)' };
                 }
                 if (name === 'rpm') return G.isNum(d.rpm) && !d.demo ? { text: String(Math.round(d.rpm / 50) * 50), src: 'car signal' } : null;
-                if (name === 'torque') return G.isNum(d.torque) && !d.demo ? { text: String(Math.round(d.torque)), src: 'car signal' } : null;
+                if (name === 'torque') {
+                    if (!G.isNum(d.torque) || d.demo) return null;
+                    // Settings > Torque unit: Nm, or kgm (to a tenth)
+                    return settings.get('torqueUnit') === 'kgm'
+                        ? { text: (d.torque / 9.80665).toFixed(1), label: 'KGM', src: 'car signal' }
+                        : { text: String(Math.round(d.torque)), src: 'car signal' };
+                }
             }
             if ((name === 'oil' || name === 'coolant') && !d.demo && G.isNum(d[name])) return { c: d[name], src: 'car signal' };
             const p = providers.value(name);
