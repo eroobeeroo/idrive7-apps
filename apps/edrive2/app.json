@@ -2,7 +2,7 @@
   "id": "edrive2",
   "title": "eDrive Live",
   "description": "Live HV battery power (kW), cell temperatures and voltages, power limits, climate / HVAC power use, and the onboard computer's average economy for the chosen mode (uncapped above the car's 90 mpg) - set up for the X5 xDrive45e (G05 PHEV)",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OA9D",
@@ -162,7 +162,7 @@
     },
     {
       "key": "powerPoll",
-      "label": "Read power every (0.1 = as fast as the car answers)",
+      "label": "Read power every (0.1 = about 10 a second, the battery unit's pace)",
       "type": "number",
       "unit": "s",
       "default": 0.1,

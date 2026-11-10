@@ -452,9 +452,11 @@ mgu.run({
         function schedulePower() {
             clearTimeout(powerTimer);
             const s = shown() ? settings.get('powerPoll') : Math.max(BG_POWER_S, settings.get('powerPoll'));
-            // 0.1 s: as fast as the battery unit answers (one read waits for the last; a short breath between, so
-            // the slow reads and other apps get the link too)
-            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), !diag.available || !inUse() || (!iOk && iFail >= 3) ? 500 : s <= 0.1 ? 10 : Math.max(60, s * 1000));
+            // 0.1 s: about 10 a second, the battery unit's own pace (1.9.3 asked again 10 ms after each answer: the unit
+            // and the link fell behind and stopped answering, NO REPLY, the kW frozen). After a miss it is given room
+            // (0.25 s, then a second from the third in a row) instead of being asked harder, until it answers again
+            const gap = !diag.available || !inUse() || (!iOk && iFail >= 3) ? 500 : iFail >= 3 ? 1000 : iFail ? 250 : Math.max(100, s * 1000);
+            powerTimer = setTimeout(() => readPower().then(schedulePower, schedulePower), gap);
         }
         schedulePower();
 
