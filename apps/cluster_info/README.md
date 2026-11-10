@@ -30,7 +30,9 @@ it whole (write a temporary file, then rename it over it):
   "values": { "battery": { "c": 24.5 }, "oil": { "c": 81 } } }
 ```
 
-`t` is `Date.now()` when written; a file older than 3 s counts as gone. `power` is optional (the kW meter);
+`t` is `Date.now()` when written; a file older than 3 s counts as gone. `power` is optional (the kW meter;
+`outMax` and `inMax` its ends in kW: eDrive Live sends the battery's discharge and charge limits, which Cluster
+Layouts and Cluster Centre use for their power gauges too);
 `values` are temperatures in °C under the names the settings offer (`battery`, `oil`, `coolant`), or
 `{ "text": "...", "label": "..." }`. The car's own oil and coolant temperatures win over a provider's.
 

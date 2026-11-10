@@ -45,8 +45,12 @@ function startProvider(log, src, opts) {
         const p = w.power ? src.power() : null;
         if (p && typeof p.kw === 'number') {
             const lim = src.limits();
-            out.power = { kw: Math.round(p.kw * 100) / 100, old: !!p.old, outMax: src.gaugeKw(),
-                inMax: Math.max(10, lim && lim.in >= 15 ? Math.round(lim.in) : src.gaugeKw() * 0.5) };
+            // the gauge's ends, as eDrive Live's own power bar: the battery's discharge and charge (regen) limits
+            // now, until they are read the "Power gauge up to" setting (and half of it for regen)
+            out.power = { kw: Math.round(p.kw * 100) / 100, old: !!p.old,
+                outMax: Math.max(20, lim && typeof lim.out === 'number' ? Math.round(lim.out) : src.gaugeKw()),
+                inMax: Math.max(10, lim && lim.in >= 15 ? Math.round(lim.in) : src.gaugeKw() * 0.5),
+                limits: !!(lim && typeof lim.out === 'number') };
         }
         const b = src.battery(), o = src.oil(), soc = src.soc ? src.soc() : null;
         if (typeof soc === 'number') out.values.soc = { pct: Math.round(soc * 10) / 10 };
