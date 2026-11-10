@@ -287,6 +287,9 @@ mgu.run({
         watch('de.bmw.infotainment.resetlogic.ResetLogic2', { bcDataAll: onBc(2) }, 'onboard computer (reset logic 2)', { pollMs: 20000 });
         watch('de.bmw.infotainment.resetlogic.ResetLogic3', { bcDataAll: onBc(3) }, 'onboard computer (reset logic 3)', { pollMs: 20000 });
 
+        /* ---------- the car's state: switched on, or parked (kit/awake.js; how it's used: "in use", below) ---------- */
+        const awake = require('./kit/awake').watch(ctx, log, { sample: () => ({ speed: live.speed, rpm: Date.now() - (live.rpmT || 0) < 5000 ? live.rpm : null }) });
+
         /* ---------- UDS: candidates with several fields on one reply ---------- */
         const diag = new Diag(ctx.signals, log);
         diag.quiet = true;
@@ -296,7 +299,9 @@ mgu.run({
         const DIAG_OPTS = { retryBaseMs: 150, pendingTimeoutMs: 1500, callTimeoutMs: 2000 };
         diag.busyMs = 150;
         const physical = diag.physical.bind(diag);
-        diag.physical = (target, sid, data, timeoutMs, accept, opts) => physical(target, sid, data, timeoutMs, accept, Object.assign({}, DIAG_OPTS, opts || {}));
+        // (the car parked - locked, nobody in it - nothing is sent at all, whatever asks: kit/awake.js. Answered as no reply.)
+        diag.physical = (target, sid, data, timeoutMs, accept, opts) => (awake.parked() ? Promise.resolve(null)
+            : physical(target, sid, data, timeoutMs, accept, Object.assign({}, DIAG_OPTS, opts || {})));
         diag.init();
         const reader = new DidReader(diag, { ecu: cfg.ecu });
         const pick = {};
@@ -378,10 +383,17 @@ mgu.run({
          * was opened or a button pressed while parked. Parked longer (charging, screen left on): it stops,
          * says so, and the car can sleep. The home-screen widget counts only while driving. */
         const IDLE_AFTER_MOVE = 3 * 60000, IDLE_AFTER_USER = 10 * 60000;
-        let lastUserT = Date.now(), lastActiveT = 0;
-        const driving = () => Date.now() - lastActiveT < IDLE_AFTER_MOVE;
-        // (or Cluster Info's panel is up asking for the power: keepFast(), so the kW shows from the start, parked too)
-        const inUse = () => driving() || Date.now() - lastUserT < IDLE_AFTER_USER || Date.now() < fastUntil;
+        // (not from the start: a head unit woken while the car is parked - a remote service, a charge timer - started
+        // this app with nobody there, and its 10 min of reads kept the car's networks up. Opening the screen counts.)
+        let lastUserT = 0, lastActiveT = 0;
+        /* The car's own state (kit/awake.js): parked (locked, nobody in it) stops everything at once; switched on
+         * (ignition, ready to drive) counts as driving, a hybrid standing at the lights in READY too. Nov 10 2026: the
+         * cluster apps asking for the power around the clock kept this app reading the battery unit with the car
+         * locked: the car couldn't sleep ("Battery management: malfunction while shutting down", BDC 801C16-18).
+         * (awake: made above, before the diagnostic link, which asks it on every request) */
+        const driving = () => !awake.parked() && (Date.now() - lastActiveT < IDLE_AFTER_MOVE || awake.on());
+        // (or another app showing its power asks: keepFast(), only while the car is switched on - never parked)
+        const inUse = () => !awake.parked() && (driving() || Date.now() - lastUserT < IDLE_AFTER_USER || (Date.now() < fastUntil && awake.on()));
         const touched = () => { const was = inUse(); lastUserT = Date.now(); if (!was) { log.info('in use again (user)'); schedulePower(); readSlow(); } };
         // (or Cluster Info's panel over the Waze map shows its power: provider.js keepFast() while it is up)
         let fastUntil = 0;
@@ -791,7 +803,7 @@ mgu.run({
 
         /** Power for display: { text, col, what }; held 0.25 s so it doesn't flicker at 60 fps. */
         function power(d, t) {
-            if (!d.demo && !inUse()) return { kw: null, text: '--', col: t.dim, what: 'PAUSED - PARKED, CAR CAN SLEEP' };
+            if (!d.demo && !inUse()) return { kw: null, text: '--', col: t.dim, what: awake.parked() ? 'PAUSED - CAR LOCKED, IT CAN SLEEP' : 'PAUSED - PARKED, CAR CAN SLEEP' };
             if (!G.isNum(d.kw)) {
                 const why = d.demo ? 'DEMO' : !diag.available ? 'NO DIAGNOSTIC LINK' : iFail >= 3 ? (settings.get('diagPage') ? 'NO REPLY - SEE DIAGNOSTICS' : 'NO REPLY') : 'READING';
                 return { kw: null, text: '--', col: t.dim, what: why };
@@ -1270,7 +1282,8 @@ mgu.run({
         }
 
         function render() {
-            if (Date.now() - lastDrawT > 5000) touched();          // the screen was just opened
+            // the screen was just opened (the first frame at start too, unless the screen isn't up: woken parked)
+            if (Date.now() - lastDrawT > 5000 && (!ui.isVisible || ui.isVisible('MAIN'))) touched();
             lastDrawT = Date.now();
             const t = ctx.theme(), d = data();
             const cv = ctx.canvas(W, H).clear(t.bg);
@@ -1386,7 +1399,7 @@ mgu.run({
                 keepFast() {
                     const was = shown(), wasInUse = inUse();
                     fastUntil = Date.now() + SHOWN_MS;
-                    if (!wasInUse) { log.info('in use again (Cluster Info)'); readSlow(); }
+                    if (!wasInUse && inUse()) { log.info('in use again (another app shows the power)'); readSlow(); }
                     if (!was && shown()) schedulePower();
                 },
             });

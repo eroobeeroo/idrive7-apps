@@ -95,6 +95,18 @@ Module._load = function (req, parent, isMain) {
     await FakeDiag.last.physical(7, 0x22, [0xdd, 0x68], 1000, null, { pendingTimeoutMs: 1500 });
     assert(FakeDiag.last.busyMs === 150, 'busy retries 150 ms apart');
     assert(phys.length === 2 && phys.every((o) => o && o.callTimeoutMs === 2000 && o.pendingTimeoutMs === 1500), 'short waits on every request');
+    // the car locked (its own state, kit/awake.js): nothing reaches the car's units, whatever asks; switched on: sent again
+    assert(SPEC.signals['de.bmw.infrastructure.VehicleCondition'] && handlers.VehicleCondition, 'the car state declared and subscribed');
+    send('VehicleCondition', { statusConditionVehicle: 'PARKEN_BN_IO' });
+    phys = [];
+    assert.strictEqual(await FakeDiag.last.physical(7, 0x22, [0xdd, 0x68], 1000, null), null);
+    assert.strictEqual(phys.length, 0, 'parked: no request sent');
+    S.demo = 'off'; await loops.MAIN();
+    assert(infos.some((m) => /^car state: parked/.test(m)), 'the state logged');
+    send('VehicleCondition', { statusConditionVehicle: 'FAHREN' });
+    await FakeDiag.last.physical(7, 0x22, [0xdd, 0x68], 1000, null);
+    assert.strictEqual(phys.length, 1, 'switched on: sent');
+    console.log('ok   locked: no requests to the car; switched on: requests again');
     assert.ok(SPEC.settings.some((s) => s.key === 'clusterInfo'), 'the Cluster Info setting');
     assert.ok(fs.existsSync(path.join(APP, 'provider.js')) && !fs.existsSync(path.join(APP, 'overlay.js')), 'a provider for Cluster Info, no panel of its own');
     console.log('eDrive Live ' + SPEC.version + ': starts and draws on the current kit (' + Object.keys(clicks).length + ' buttons)');

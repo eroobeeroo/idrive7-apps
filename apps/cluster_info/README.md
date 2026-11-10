@@ -37,5 +37,5 @@ Layouts and Cluster Centre use for their power gauges too);
 `{ "text": "...", "label": "..." }`. The car's own oil and coolant temperatures win over a provider's.
 
 While its panel is up, Cluster Info writes `wanted.json` in the same folder: `{ "t": ..., "power": true,
-"values": ["battery", "oil"] }`. Read it to know when to read fast and write (and let the car sleep
-otherwise); eDrive Live does (`apps/edrive2/provider.js`).
+"values": ["battery", "oil"] }` - only while the car is switched on (`kit/awake.js`: told it is off, the panel asks
+nothing). Read it to know when to read fast and write (and let the car sleep otherwise); eDrive Live does (`apps/edrive2/provider.js`).

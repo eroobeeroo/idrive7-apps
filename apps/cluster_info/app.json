@@ -2,12 +2,15 @@
   "id": "cluster_info",
   "title": "Cluster Info",
   "description": "A small panel of up to three live values (battery power from eDrive Live, battery charge, battery, oil and coolant temperature) over the Waze map in the cluster or on the HUD, and turn signal arrows on the HUD",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OA9E",
   "iconGlyph": "gauge",
   "signals": {
+    "de.bmw.infrastructure.VehicleCondition": {
+      "VehicleCondition": "s"
+    },
     "de.bmw.infotainment.vehicle.CDS": {
       "statusEngineTemperature": "rs",
       "statusEngineSpeed2": "rs"

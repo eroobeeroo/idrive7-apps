@@ -39,6 +39,9 @@ mgu.run({
         const { ui, settings, log } = ctx;
         const car = new Car(ctx, ['temps', 'rpm', 'torque']);
         const providers = startProviders(log);
+        /* The car's state (kit/awake.js): told it is switched off, the panel asks no app for anything - their reads go
+         * through the car's gateway and kept a locked car from sleeping (Nov 10 2026). */
+        const awake = require('./kit/awake').watch(ctx, log);
         const live = { indicator: 'off', night: null, profile: null, raw: {} };
         const sigStatus = {};
         const one = (v, key) => {
@@ -188,7 +191,7 @@ mgu.run({
             },
             /** The kW meter's slot (0-2 among the slots in use; values with a lower slot go before it). */
             powerAt() { return Math.max(0, slots().indexOf('power')); },
-            keepFast() { providers.want({ power: slots().indexOf('power') >= 0 || (settings.get('underline') || 'off') !== 'off', values: chosen() }); },
+            keepFast() { if (!awake.off()) providers.want({ power: slots().indexOf('power') >= 0 || (settings.get('underline') || 'off') !== 'off', values: chosen() }); },
             indicator: () => live.indicator,
             night: () => live.night === true,
         };

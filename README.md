@@ -19,7 +19,9 @@
 > In this fork, eDrive Live writes each battery power reading for Cluster Info and Cluster Layouts the moment it
 > reads it, and both watch for it, so the kW on the cluster is a read behind rather than up to a second; its
 > Economy page also shows the electric consumption of the drive (mi/kWh, kWh/100 mi) from its own power reads,
-> whether or not the onboard computer answers.
+> whether or not the onboard computer answers. None of them talks to the car once it is locked
+> (`kit/runtime/awake.js`, section 4.5): with 1.9.6 the cluster apps' requests had kept eDrive Live reading the
+> battery around the clock, and the car couldn't sleep. Fixed in eDrive Live 1.9.7, Cluster Info 1.6.8.
 >
 > **License.** This fork is GPL-3.0-or-later ([`LICENSE`](LICENSE)): anyone who distributes it, or a changed
 > version, must make its full source available under the same license. Code from the original project is also
@@ -586,6 +588,15 @@ BMW's own diagnostic job list on the unit uses the same requests.
 
 Clearing fault codes in all modules can make control units restart, and the head unit itself
 may reboot.
+
+**Every request wakes the car's networks.** The head unit can stay up for a while after the car is locked, and an
+app still sending requests then keeps the gateway and every unit behind it awake: the body controller stores
+"no sleep in parking state" / "sleep error while customer absent" (801C16 - 801C18, with "PWF status query faulty"
+801C10), the engine unit misses its switch-off time, and the car warns *Battery management: malfunction while
+shutting down the vehicle electronics*. `kit/runtime/awake.js` tells an app the car's own state
+(`VehicleCondition.statusConditionVehicle`: parked, someone in it, ignition on, ready to drive) so it can stop:
+eDrive Live sends nothing once the car says it is parked, and only reads for other apps while the car is switched
+on; Cluster Info and Light Show ask nothing of the car while it is off.
 
 ### 4.6 Media, cameras and the Drive Recorder
 

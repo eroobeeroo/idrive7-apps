@@ -77,9 +77,17 @@ mgu.run({
             LAMPS.forEach((l) => { link.how[l.id] = checked[l.id] && checked[l.id].how === 'flm' ? 'flm' : 'out'; });
         };
         restore();
-        // the direct link found before: tried at start and every 30 s while it isn't up
-        if (checked._direct) tryDirect([checked._direct]).catch(() => null);
-        setInterval(() => { if (checked._direct && !direct.available && !player.running && !check.running) tryDirect([checked._direct]).catch(() => null); }, 30000);
+        /* The car's state (kit/awake.js): told it is switched off, no new connection to its gateway, and one left open
+         * is closed once nobody is in the car (parked) - the gateway's traffic kept a locked car from sleeping (Nov 10
+         * 2026: the cluster apps' reads; this link is the same kind of traffic). */
+        const awake = require('./kit/awake').watch(ctx, log);
+        // the direct link found before: tried at start and every 30 s while it isn't up (and the car isn't off)
+        if (checked._direct && !awake.off()) tryDirect([checked._direct]).catch(() => null);
+        setInterval(() => {
+            const idle = !player.running && !check.running;
+            if (awake.parked() && direct.available && idle) { log.info('light show: the car is parked: direct link closed'); direct.close(); return; }
+            if (checked._direct && !direct.available && idle && !awake.off()) tryDirect([checked._direct]).catch(() => null);
+        }, 30000);
 
         /* ---------- parked or moving (Vehicle2 speed) ---------- */
         let speed = null;
@@ -274,9 +282,6 @@ mgu.run({
                 link.releaseForm = null;          // (every form again for the next lamp: one may take what another doesn't)
             }
             restore();
-        // the direct link found before: tried at start and every 30 s while it isn't up
-        if (checked._direct) tryDirect([checked._direct]).catch(() => null);
-        setInterval(() => { if (checked._direct && !direct.available && !player.running && !check.running) tryDirect([checked._direct]).catch(() => null); }, 30000);
             await link.stop();
             await verifyBack();
             back.running = false;
