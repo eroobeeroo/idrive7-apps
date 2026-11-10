@@ -26,13 +26,28 @@ function startProvider(log, src, opts) {
     const dir = opts.dir || DIR, now = opts.now || Date.now;
     let wanted = null, wantedRead = 0, writing = false, failed = false;
     const status = { wanted: false, written: 0, error: null };
+    /*
+     * What the apps showing these want: wanted.json (Cluster Info's) and wanted-<id>.json (Cluster Layouts', Cluster
+     * Centre's: each its own file, since the folder is sticky and one app can't replace another's), the fresh ones
+     * merged. (A wanted.json left behind by an app no longer showing stopped the others asking: one file each.)
+     */
     function readWanted() {
         if (now() - wantedRead < 1000) return wanted;
         wantedRead = now();
-        try {
-            const w = JSON.parse(fs.readFileSync(path.join(dir, 'wanted.json'), 'utf8'));
-            wanted = w && now() - w.t < WANTED_FRESH_MS ? w : null;
-        } catch (e) { wanted = null; }
+        let names = [];
+        try { names = fs.readdirSync(dir).filter((n) => /^wanted(-[\w.-]+)?\.json$/.test(n)); } catch (e) { names = []; }
+        let merged = null;
+        names.forEach((n) => {
+            try {
+                const w = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
+                if (!w || typeof w.t !== 'number' || now() - w.t >= WANTED_FRESH_MS) return;
+                merged = merged || { t: w.t, power: false, values: [] };
+                merged.t = Math.max(merged.t, w.t);
+                merged.power = merged.power || !!w.power;
+                (Array.isArray(w.values) ? w.values : []).forEach((v) => { if (merged.values.indexOf(v) < 0) merged.values.push(v); });
+            } catch (e) { /* half written: the next read */ }
+        });
+        wanted = merged;
         return wanted;
     }
     let lastWrite = 0;

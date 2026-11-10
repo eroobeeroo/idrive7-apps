@@ -46,7 +46,7 @@ function startProviders(log, opts) {
         try { names = fs.readdirSync(dir); } catch (e) { return; }
         const next = {};
         names.forEach((n) => {
-            if (!/\.json$/.test(n) || n === WANTED) return;
+            if (!/\.json$/.test(n) || /^wanted(-[\w.-]+)?\.json$/.test(n)) return;   // (what the apps want: not a provider)
             try {
                 const j = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
                 if (j && typeof j.t === 'number' && now() - j.t < STALE_MS) next[n.replace(/\.json$/, '')] = j;
@@ -94,7 +94,7 @@ function startProviders(log, opts) {
     function watchDir() {
         if (watcher || !ready || (opts.watch === undefined ? !!opts.setInterval : !opts.watch)) return;   // (tests with their own timers: unwatched)
         try {
-            watcher = fs.watch(dir, (ev, name) => { if (!name || (/\.json$/.test(name) && name !== WANTED)) soon(); });
+            watcher = fs.watch(dir, (ev, name) => { if (!name || (/\.json$/.test(name) && !/^wanted/.test(name))) soon(); });
             watcher.on('error', () => { try { watcher.close(); } catch (e) { /* gone */ } watcher = null; });
         } catch (e) { watcher = null; }
     }
