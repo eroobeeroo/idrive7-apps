@@ -16,9 +16,11 @@
 > [cauliflowermossgrape/idrive7-apps](https://github.com/cauliflowermossgrape/idrive7-apps), so the MGU Store
 > lists each app once.
 >
-> **License.** This fork is GPL-3.0-or-later ([`LICENSE`](LICENSE)): anyone who distributes it, or a changed
-> version, must make its full source available under the same license. Code from the original project is also
-> available under its MIT license ([`LICENSE-MIT`](LICENSE-MIT)), which stays with it; the license section
-> further down describes the original project. Versions of this fork's apps published before this change remain
-> under the MIT license they were published with.
+> **License.** This fork's own apps (eDrive Live, Cluster Info, Light Show) and additions are under the
+> [PolyForm Noncommercial License 1.0.0](LICENSE): free to use, change and share for any noncommercial purpose,
+> with the licence and copyright notice kept. **Commercial use is not licensed: nobody may sell them or charge
+> for installing, coding or bundling them.** If you paid for them, ask for a refund. Code from the original
+> project stays under its MIT license ([`LICENSE-MIT`](LICENSE-MIT)) and `kit/renderd` under GPL-3.0-or-later; the
+> license section further down describes the original project. Versions of this fork published before
+> 10 November 2026 remain under the license they were published with (GPL-3.0-or-later, before that MIT).
 
