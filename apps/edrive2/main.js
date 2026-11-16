@@ -117,8 +117,7 @@ mgu.run({
         watch('de.bmw.infrastructure.EnvironmentalInformation', {
             ExteriorTemperature: (v) => { const a = sc('ambient', v.temperatureExterior); if (a !== null) live.ambient = a; },
         }, 'ambient');
-        // the distance this drive, from the speed (the Economy page's electric figure: the battery's net energy
-        // over it, from this app's own reads, which need nothing from the onboard computer)
+        // the distance this drive, from the speed (this app's own reads, needing nothing from the onboard computer)
         const drive = { km: 0, t: 0 };
         watch('de.bmw.infotainment.vehicle.Vehicle2', {
             statusCarSpeed2: (v) => {
@@ -140,41 +139,6 @@ mgu.run({
             },
         }, 'rpm and oil temperature');
 
-        /* ---------- the onboard computer's average economy (Economy page) ----------
-         * The car's reset logic sends the chosen mode's figures (ResetLogic3, else 2, else 1: whichever answers);
-         * the tank's litres and the odometer give our own, uncapped figure (economy.js). Read always (the car's
-         * own cadence), so the counts cover every drive. */
-        const ECON = require('./economy');
-        const econ = new ECON.Tracker(st.econ);
-        st.econ = econ.state();
-        const econLive = { bc: null, src: null, byMode: {}, raw: null, tank: null, odo: null, avgOnly: null, seen: {}, firstRaw: {} };
-        let econSavedT = 0;
-        const econNote = () => {
-            econ.note(econLive.bc, econLive.tank, econLive.odo);
-            if (econLive.bc && econLive.bc.mode) econLive.byMode[econLive.bc.mode] = econLive.bc;
-            if (Date.now() - econSavedT > 30000) { econSavedT = Date.now(); save(); }
-        };
-        const onBc = (src) => (v) => {
-            // the newest service that answers is the one used (3 before 2 before 1)
-            const rank = { 3: 3, 2: 2, 1: 1 }[src];
-            econLive.seen[src] = (econLive.seen[src] || 0) + 1;
-            if (!econLive.firstRaw[src]) { econLive.firstRaw[src] = JSON.stringify(v).slice(0, 400); log.info('economy: reset logic ' + src + ' first value ' + econLive.firstRaw[src]); }
-            if (econLive.src && econLive.src > rank) return;
-            const bc = ECON.decode(v);
-            if (!bc || (!bc.mode && bc.avg === null)) return;   // a shape we can't read: the raw value is in the log
-            econLive.src = rank;
-            econLive.raw = JSON.stringify(v).slice(0, 600);
-            if (!econLive.bc || econLive.bc.mode !== bc.mode || econLive.bc.avg !== bc.avg) log.info('economy: ' + bc.modeName + ' ' + bc.avg + ' ' + (bc.unit || '?') + (bc.capped ? ' (capped)' : '') + ' raw ' + JSON.stringify(bc.raw));
-            econLive.bc = bc;
-            econNote();
-        };
-        // the tank and the odometer: KombiIF statusRangeTankStatus, subscribed with the power distribution below
-        const onTank = (v) => {
-            const lv = one(v, 'fluidLevelFuelTank'), od = one(v, 'mileageKilometre');   // plain or wrapped
-            if (typeof lv === 'number' && lv > 0 && lv < 255) econLive.tank = lv;
-            if (typeof od === 'number' && od > 0 && od < 4294967295) econLive.odo = od;
-            econNote();
-        };
 
         /* ---------- why the engine runs ----------
          * The car's own reason electric driving is not possible (FES statusElectricVehicleDriveSystemState:
@@ -257,8 +221,11 @@ mgu.run({
         }, 'steering wheel', { pollMs: 15000 });
         watch('de.bmw.infotainment.KombiIF', {
             statusDisplayElectricalPowerDistribution: (v) => { rawSeen('distribution', v); live.pd = entries(v, 'displayRepartitionDriveElectricPower')[0] || null; },
-            statusRangeTankStatus: onTank,
-        }, 'power distribution, tank and odometer', { pollMs: 15000 });
+        }, 'power distribution', { pollMs: 15000 });
+        const { FastKw } = require('./fastkw');
+        // the cluster's eDRIVE needle (a %) fitted to the battery's kW reads = a fast, low-lag power value. It is
+        // shown on the Diagnostics page (raw vs fast + the learned fit) so you can see the method work. fastkw.js.
+        const fast = new FastKw();
         const battTemp = (raw) => { const v = sc('batteryTemp', raw); return v !== null && v > -30 && v < 70 ? v : null; };
         watch('de.bmw.infotainment.drivingexcitement.Efficiencytainment2', {
             statusBatteryTemperature: (v) => {
@@ -266,26 +233,23 @@ mgu.run({
                 const e = entries(v, 'actualValueTemperatureHighVoltageStorage')[0];
                 if (e) live.carT = { avg: battTemp(e.actualValueTemperatureHighVoltageStorage), min: battTemp(e.actualValueTemperatureHighVoltageStorageMinimum), max: battTemp(e.actualValueTemperatureHighVoltageStorageMaximum) };
             },
-        }, 'battery temperature', { pollMs: 30000 });
+            // electric drive and recuperation as shares (%) of their most: the input the fast power is fitted to
+            statusPowerRelativHybrid: (v) => {
+                rawSeen('edrive needle', v);
+                const e = entries(v, 'displayActualValuePowerRelativeDrivingElectric')[0];
+                if (!e) return;
+                const dr = e.displayActualValuePowerRelativeDrivingElectric, rg = e.displayActualValuePowerRelativeRecuperation;
+                if (typeof dr !== 'number' || typeof rg !== 'number' || dr > 254 || rg > 254) return;
+                live.needleD = dr; live.needleR = rg; live.needleT = Date.now();
+                if (!live.needleSeen) { live.needleSeen = true; log.info('eDRIVE needle: drive ' + dr + ', regen ' + rg); }
+                fast.needle(dr, rg, Date.now()); fast.engine(engineOn());
+            },
+        }, 'battery temperature and eDRIVE needle', { pollMs: 30000 });
         watch('de.bmw.infotainment.lsc.LSCDataSink', {
             statusHighVoltageStorage: (v) => { rawSeen('HV storage', v); let x = one(v, 'actualValueVoltageHighVoltageStorage'); if (G.isNum(x) && x > 1500) x /= 10;       // 0.1 V on the X5 45e
                 if (G.isNum(x) && x > 150 && x < 500) { live.lscV = x; live.lscVT = Date.now(); } },
         }, 'HV storage');
 
-        /* the onboard computer last: ResetLogic3's field is the one reliable (TCP) one this app reads, and a
-         * subscription that hangs holds up every one after it. 1 and 2 first; each re-read every 20 s while in
-         * use (a field the car only sends on a change). ResetLogic's simpler averageConsumption is the fallback:
-         * the chosen mode's figure without the mode. */
-        watch('de.bmw.infotainment.resetlogic.ResetLogic', {
-            bcDataAll: onBc(1),
-            averageConsumption: (v) => {
-                const a = ECON.decodeAverage(v);
-                if (!econLive.firstRaw.avg) { econLive.firstRaw.avg = JSON.stringify(v).slice(0, 300); log.info('economy: averageConsumption first value ' + econLive.firstRaw.avg); }
-                if (a && a.avg !== null) econLive.avgOnly = a;
-            },
-        }, 'onboard computer (reset logic)', { pollMs: 20000 });
-        watch('de.bmw.infotainment.resetlogic.ResetLogic2', { bcDataAll: onBc(2) }, 'onboard computer (reset logic 2)', { pollMs: 20000 });
-        watch('de.bmw.infotainment.resetlogic.ResetLogic3', { bcDataAll: onBc(3) }, 'onboard computer (reset logic 3)', { pollMs: 20000 });
 
         /* ---------- the car's state: switched on, or parked (kit/awake.js; how it's used: "in use", below) ---------- */
         const awake = require('./kit/awake').watch(ctx, log, { sample: () => ({ speed: live.speed, rpm: Date.now() - (live.rpmT || 0) < 5000 ? live.rpm : null }) });
@@ -424,6 +388,9 @@ mgu.run({
             }
             trip.peakOut = Math.max(trip.peakOut, kw);
             if (G.isNum(live.speed) && live.speed > 1) trip.peakIn = Math.max(trip.peakIn, -kw);
+            // feed the fast-power fit: this battery kW, learned against the needle one real read-latency ago
+            fast.engine(engineOn());
+            fast.ac(live.acKw); fast.reading(kw, now, rate.length ? rate[rate.length - 1][1] : undefined);
             live.kw = kw; live.kwT = now;
             push(trace, TRACE_S, kw);
             learnBaseline(kw, now);
@@ -817,8 +784,8 @@ mgu.run({
         }
 
         /* ---------- pages ---------- */
-        const pages = () => ['power', 'economy', 'battery', 'cells', 'climate'].concat(settings.get('diagPage') ? ['diag', 'scan', 'signals'] : []);
-        const NAMES = { power: 'Power', economy: 'Economy', battery: 'Battery', cells: 'Cells', climate: 'Climate', diag: 'Diagnostics', scan: 'Scan', signals: 'Signals' };
+        const pages = () => ['power', 'battery', 'cells', 'climate'].concat(settings.get('diagPage') ? ['diag', 'scan', 'signals'] : []);
+        const NAMES = { power: 'Power', battery: 'Battery', cells: 'Cells', climate: 'Climate', diag: 'Diagnostics', scan: 'Scan', signals: 'Signals' };
         let page = 0;
         ui.onClick('BTN_PAGE', () => { touched(); page = (page + 1) % pages().length; return render(); });
         ui.onClick('BTN_PREV', () => { touched(); const n = pages().length; page = (page + n - 1) % n; return render(); });
@@ -877,75 +844,6 @@ mgu.run({
             cv.text('now', x + w, y + h + 22, 16, t.dim, { align: 'right' });
         }
 
-        /* The Economy page: the chosen mode's average, large; above the car's cap (about 90 mpg) our own figure
-         * too; every mode seen since, with ours beside the car's. */
-        /** This drive's electric consumption: the battery's net energy out (out minus regen) over the distance,
-         * { miKwh, line }. */
-        function electricDrive(d) {
-            const tp = d.demo ? { out: 2.84, regen: 0.61 } : trip, km = d.demo ? 14.2 : drive.km;
-            const kwh = tp.out - tp.regen, mi = km / ECON.KM_PER_MI;
-            const miKwh = mi >= 0.3 && kwh > 0.05 ? mi / kwh : null;
-            const line = 'Electric this drive  ' + (mi < 0.3 ? 'from a few tenths of a mile' : G.fmt(kwh, 2) + ' kWh net over ' + G.fmt(mi, 1) + ' mi'
-                + (miKwh !== null ? '  =  ' + G.fmt(miKwh, 1) + ' mi/kWh, ' + G.fmt(100 / miKwh, 0) + ' kWh/100 mi' : kwh <= 0.05 ? '  (more regained than used)' : ''));
-            return { miKwh, line };
-        }
-        function renderEconomy(cv, t, d) {
-            const bc = econLive.bc;
-            G.panel(cv, t, 24, 44, 760, 468, 'Average economy');
-            const fmtMpg = (m) => (m === null || m === undefined ? '--' : m === Infinity || m > 999 ? '999+' : G.fmt(m, m < 100 ? 1 : 0));
-            const el = electricDrive(d);
-            if (!bc) {
-                // no mode from the onboard computer (yet): its plain average if it sends that, ours since this app,
-                // else the electric figure of this drive (the battery's own reads: always there)
-                const a = econLive.avgOnly, mine = econ.figure(ECON.APP), fuelOurs = mine && mine.mpg !== null;
-                const big = a ? G.fmt(a.avg, 1) : fuelOurs ? fmtMpg(mine.mpg) : el.miKwh !== null ? G.fmt(el.miKwh, 1) : '--';
-                cv.text(a ? 'ONBOARD COMPUTER' : fuelOurs ? 'SINCE THIS APP' : 'THIS DRIVE, ELECTRIC', 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
-                cv.text(big, 404, 250, 130, big === '--' ? t.dim : t.text, { align: 'center', font: 'bold' });
-                cv.text(a ? (a.unit || '').toUpperCase() : fuelOurs ? 'MPG' : 'MI/KWH', 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
-                const lines = [
-                    el.line,
-                    'Fuel, ours since this app  ' + (!mine ? 'waiting for the tank and odometer' : mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi'),
-                    'Onboard computer  ' + ([1, 2, 3].map((n) => 'RL' + n + ' ' + (econLive.seen[n] || 0)).join('  ')) + '  ·  '
-                        + Object.keys(sigStatus).filter((k) => /onboard/.test(k)).map((k) => sigStatus[k]).join(' / '),
-                ];
-                lines.forEach((l, i) => cv.text(l, 48, 338 + i * 34, 20, t.text, { font: 'label', literal: true }));
-                cv.text('The mode (Individual, since refuelling...) shows once the onboard computer answers.', 48, 484, 16, t.dim, { font: 'label', literal: true });
-            } else {
-                const mine = econ.figure(bc.mode), carMpg = ECON.toMpg(bc.avg, bc.unitNum);
-                cv.text(bc.modeName.toUpperCase(), 404, 106, 24, t.dim, { align: 'center', font: 'bold', spacing: 1.5 });
-                // the big number: the car's own, unless it is at its cap and ours covers the mode
-                const useMine = bc.capped && mine && mine.mpg !== null && mine.full;
-                const big = useMine ? fmtMpg(mine.mpg) : bc.capped ? fmtMpg(bc.avg) + '+' : bc.avg === null ? '--' : G.fmt(bc.avg, 1);
-                cv.text(big, 404, 250, 130, useMine ? GO : t.text, { align: 'center', font: 'bold' });
-                cv.text(useMine ? 'MPG  (OURS: THE CAR STOPS AT ' + fmtMpg(bc.avg) + ')' : (bc.unit || '').toUpperCase(), 404, 296, 22, t.dim, { align: 'center', font: 'bold', spacing: 1.2 });
-                const lines = [
-                    'Car\'s figure  ' + (bc.avg === null ? '--' : G.fmt(bc.avg, 1) + ' ' + (bc.unit || '')) + (bc.capped ? '  (its top)' : '') + (bc.unitNum !== 3 && carMpg !== null ? '  =  ' + fmtMpg(carMpg) + ' mpg' : ''),
-                    'Ours  ' + (!mine || mine.mpg === null ? 'counting (shown from 3 km)' : fmtMpg(mine.mpg) + ' mpg, ' + G.fmt(mine.litres, 0) + ' L over ' + G.fmt(mine.km / ECON.KM_PER_MI, 0) + ' mi')
-                        + (mine && !mine.full ? '  ·  saw ' + Math.round(mine.cover * 100) + ' % of this mode' : ''),
-                    'Distance  ' + (bc.km === null ? '--' : G.fmt(bc.km, 0)) + (bc.eKm !== null && bc.km ? '  ·  electric ' + Math.round(100 * bc.eKm / Math.max(1, bc.km)) + ' %' : '')
-                        + (bc.speedAvg !== null ? '  ·  avg speed ' + G.fmt(bc.speedAvg, 0) : '') + (bc.resetAt ? '  ·  since ' + bc.resetAt : ''),
-                ];
-                lines.push(el.line);
-                lines.forEach((l, i) => cv.text(l, 48, 338 + i * 34, 20, i === 1 && useMine ? GO : t.text, { font: 'label', literal: true }));
-                cv.text('Change the mode on the cluster (the onboard computer menu): this page follows it.', 48, 484, 16, t.dim, { font: 'label', literal: true });
-            }
-            // ---- every mode seen
-            G.panel(cv, t, 800, 44, 776, 468, 'Modes');
-            ['MODE', 'CAR', 'OURS', 'SEEN'].forEach((h, i) => cv.text(h, [824, 1180, 1340, 1552][i], 122, 16, t.dim, { font: 'bold', spacing: 1.2, align: i ? 'right' : 'left' }));
-            const modes = Object.keys(ECON.MODE_NAMES).filter((m) => econLive.byMode[m] || econ.state()[m]);
-            if (!modes.length) cv.text('None yet: each mode shows here once the onboard computer or our own count has it.', 824, 170, 18, t.dim, { font: 'label', literal: true });
-            modes.forEach((m, i) => {
-                const b = econLive.byMode[m] || (econ.state()[m] && econ.state()[m].last) || {}, f = econ.figure(m), y = 164 + i * 44;
-                if (bc && m === bc.mode) cv.roundRect(812, y - 30, 752, 42, 8, withAlpha(t.track, 0.6));
-                cv.text(ECON.MODE_NAMES[m], 824, y, 22, t.text, { font: 'bold' });
-                cv.text(typeof b.avg === 'number' ? G.fmt(b.avg, 1) + (b.capped ? '+' : '') : '--', 1180, y, 22, t.text, { font: 'bold', align: 'right' });
-                cv.text(f && f.mpg !== null ? fmtMpg(f.mpg) : '--', 1340, y, 22, f && f.full ? GO : t.dim, { font: 'bold', align: 'right' });
-                cv.text(f ? Math.round(f.cover * 100) + ' %' : '--', 1552, y, 18, t.dim, { align: 'right' });
-            });
-            cv.text('OURS: fuel used (the tank, whole litres) over the odometer, from each mode\'s reset while this app ran;', 824, 440, 15, t.dim, { font: 'label', literal: true });
-            cv.text('SEEN: how much of the mode\'s distance that covers. Tank ' + (econLive.tank === null ? '--' : econLive.tank + ' L') + '  ·  odometer '
-                + (econLive.odo === null ? '--' : G.fmt(econLive.odo, 0) + ' km'), 824, 462, 15, t.dim, { font: 'label', literal: true });
-        }
 
         function renderPower(cv, t, d) {
             const pw = power(d, t), lim = limitsKw(d);
@@ -1190,6 +1088,13 @@ mgu.run({
             const link = diag.p ? (diag.available ? 'link up' : 'link down') : 'no link (' + (diag.error || 'not started') + ')';
             const rr = readRate();
             cv.text('UDS 22  ·  ' + link + '  ·  power read ' + (rr ? G.fmt(rr.hz, 1) + 'x/s, ' + G.fmt(rr.ms, 0) + ' ms each' : 'n/a') + (pMiss ? '  ·  power missed ' + pMiss : '') + (stalls ? '  ·  stalls ' + stalls : '') + (Object.keys(slowFail).length ? '  ·  missed ' + Object.keys(slowFail).map((k) => k + ' ' + slowFail[k]).join(' ') : '') + '  ·  power sign ' + cfg.powerSign + '  ·  baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples)', 48, 112, 22, t.text, { font: 'label' });
+            // fast power (fastkw.js): the eDRIVE needle fitted to the kW reads - shown here so the method is visible
+            const ff = fast.fit, fn = fast.now(Date.now());
+            const needleFresh = live.needleT && Date.now() - live.needleT < 2000;
+            const needleTxt = needleFresh ? 'needle ' + (live.needleD || 0) + '/' + (live.needleR || 0) + '%' : (live.needleSeen ? 'needle stale' : 'no needle');
+            const fitTxt = ff.n >= 1 ? 'fit a ' + G.fmt(ff.a, 2) + ' b ' + G.fmt(ff.b, 2) + ' c ' + G.fmt(ff.c, 2) + '  ·  ' + ff.n + ' fits' + (ff.err !== null ? '  ·  err ' + G.fmt(ff.err, 2) + ' kW' : '') : 'learning';
+            const fastTxt = !fast.electric ? 'engine on: raw only' : fn === null ? 'warming up' : 'fast ' + G.fmt(fn, 2) + ' kW vs raw ' + (G.isNum(live.kw) ? G.fmt(live.kw, 2) : '--') + ' kW';
+            cv.text('FAST kW  ·  ' + needleTxt + '  ·  ' + fitTxt + '  ·  ' + fastTxt, 48, 134, 22, t.text, { font: 'label' });
             const cols = [48, 200, 290, 380, 900, 1290];
             ['VALUE', 'ECU', 'DID', 'REPLY', 'DECODED', 'STATUS'].forEach((h, i) => cv.text(h, cols[i], 156, 20, t.dim, { font: 'bold', spacing: 1 }));
             cv.fillRect(48, 168, 1504, 1, t.tick);
@@ -1262,7 +1167,6 @@ mgu.run({
             // what Cluster Info's panel gets from eDrive Live, and whether it works
             const ps = provider ? provider.status() : null;
             const lines = [
-                'Onboard computer: ' + (econLive.raw ? 'reset logic ' + econLive.src + '  ' + econLive.raw.slice(0, 150) : 'nothing yet (' + ['3', '2', ''].map((n) => sigStatus['onboard computer (reset logic' + (n ? ' ' + n : '') + ')'] || 'waiting').join(' / ') + ')'),
                 'Cluster Info: ' + (settings.get('clusterInfo') === 'off' ? 'off (setting)' : !ps ? 'not started' : ps.wanted ? 'its panel is up, values sent ' + (ps.error ? '- error: ' + ps.error : (Date.now() - ps.written < 2000 ? 'now' : 'not yet')) : 'its panel is not up (or Cluster Info is not installed)')
                     + '   ·   Oil temperature: ' + (G.isNum(live.oil) && Date.now() - live.oilT < 60000 ? fmtT(live.oil) + ' from the ' + live.oilSrc : 'none (' + (sigStatus['rpm and oil temperature'] || 'waiting') + ')'),
             ];
@@ -1289,7 +1193,7 @@ mgu.run({
             const cv = ctx.canvas(W, H).clear(t.bg);
             const pg = pages();
             if (page >= pg.length) page = 0;
-            ({ power: renderPower, economy: renderEconomy, battery: renderBattery, cells: renderCells, climate: renderClimate, diag: renderDiag, scan: renderScan, signals: renderSignals })[pg[page]](cv, t, d);
+            ({ power: renderPower, battery: renderBattery, cells: renderCells, climate: renderClimate, diag: renderDiag, scan: renderScan, signals: renderSignals })[pg[page]](cv, t, d);
             G.frame(cv, t, pg.map((p) => NAMES[p]), page, [d.demo && { text: 'DEMO' }]);
             return ui.image('MAIN_GFX', cv);
         }
