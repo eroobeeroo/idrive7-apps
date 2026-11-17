@@ -789,6 +789,8 @@ mgu.run({
         let page = 0;
         ui.onClick('BTN_PAGE', () => { touched(); page = (page + 1) % pages().length; return render(); });
         ui.onClick('BTN_PREV', () => { touched(); const n = pages().length; page = (page + n - 1) % n; return render(); });
+        // a tap on a header tab (renderer that routes touch): go straight to that page
+        if (ctx.onTab) ctx.onTab((i) => { touched(); const n = pages().length; page = i >= 0 && i < n ? i : page; return render(); });
         ui.onClick('BTN_RESET', () => {
             touched();
             if (pages()[page] === 'scan') {
