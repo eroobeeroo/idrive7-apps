@@ -19,8 +19,10 @@
  *   f.now(t) -> kW | null        f.fit -> { a, b, c, n, err }
  */
 const LAG_MS = 250;          // fallback lag if reading() isn't given the measured read latency (request + answer)
-const FRESH_MS = 1500;       // a needle older than this: no fast value
-const KEEP_MS = 4000;        // needle history kept (to match readings that arrive late)
+// the needle is change-notified: it holds its value until the next change (steady power -> no new needle for many
+// seconds), so a needle is current until it is this old; past this we assume the signal dropped and show readings.
+const HOLD_MS = 30000;
+const KEEP_MS = 31000;       // needle history kept (spans the hold window, so a steady needle is not discarded)
 const MIN_FIT = 6;           // readings learned before a fast value is given (a touch more warm-up: steadier first value)
 const FORGET = 0.98;         // each reading weighs this much more than the last (~50 readings: a/b/c are physical scale)
 
@@ -57,7 +59,7 @@ class FastKw {
     at(t) {
         let best = null;
         for (const h of this.hist) { if (h[0] <= t) best = h; else break; }
-        return best && t - best[0] < FRESH_MS ? best : null;
+        return best && t - best[0] < HOLD_MS ? best : null;
     }
 
     /** A battery reading (kW, + the battery gives power) that arrived at t: learned against the needle then. */
@@ -83,11 +85,11 @@ class FastKw {
     now(t) {
         if (!this.electric || this.n < MIN_FIT || !this.hist.length) return null;
         const h = this.hist[this.hist.length - 1];
-        if (t - h[0] > FRESH_MS) return null;
+        if (t - h[0] > HOLD_MS) return null;
         return this.theta[0] * h[1] - this.theta[1] * h[2] + this.acKw + this.theta[2];
     }
 
     get fit() { return { a: this.theta[0], b: this.theta[1], c: this.theta[2], n: this.n, err: this.err }; }
 }
 
-module.exports = { FastKw, LAG_MS, FRESH_MS, MIN_FIT };
+module.exports = { FastKw, LAG_MS, HOLD_MS, MIN_FIT };
