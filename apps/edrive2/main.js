@@ -223,9 +223,13 @@ mgu.run({
             statusDisplayElectricalPowerDistribution: (v) => { rawSeen('distribution', v); live.pd = entries(v, 'displayRepartitionDriveElectricPower')[0] || null; },
         }, 'power distribution', { pollMs: 15000 });
         const { FastKw } = require('./fastkw');
+        const logs = require('./logs');
         // the cluster's eDRIVE needle (a %) fitted to the battery's kW reads = a fast, low-lag power value. It is
         // shown on the Diagnostics page (raw vs fast + the learned fit) so you can see the method work. fastkw.js.
         const fast = new FastKw();
+        // ring buffers for the Logs QR codes: when each eDRIVE needle arrives (to see its true cadence), and the
+        // raw-vs-fast kW it produced. [t, drive%, recup%] and [t, rawKw, fastKw|null].
+        const needleLog = [], powerLog = [];
         const battTemp = (raw) => { const v = sc('batteryTemp', raw); return v !== null && v > -30 && v < 70 ? v : null; };
         watch('de.bmw.infotainment.drivingexcitement.Efficiencytainment2', {
             statusBatteryTemperature: (v) => {
@@ -243,6 +247,7 @@ mgu.run({
                 live.needleD = dr; live.needleR = rg; live.needleT = Date.now();
                 if (!live.needleSeen) { live.needleSeen = true; log.info('eDRIVE needle: drive ' + dr + ', regen ' + rg); }
                 fast.needle(dr, rg, Date.now()); fast.engine(engineOn());
+                needleLog.push([Date.now(), dr, rg]); if (needleLog.length > 150) needleLog.shift();
             },
         }, 'battery temperature and eDRIVE needle', { pollMs: 30000 });
         watch('de.bmw.infotainment.lsc.LSCDataSink', {
@@ -391,6 +396,9 @@ mgu.run({
             // feed the fast-power fit: this battery kW, learned against the needle one real read-latency ago
             fast.engine(engineOn());
             fast.ac(live.acKw); fast.reading(kw, now, rate.length ? rate[rate.length - 1][1] : undefined);
+            const fnow = fast.now(now);
+            powerLog.push([now, Math.round(kw * 10) / 10, fnow === null ? null : Math.round(fnow * 10) / 10]);
+            if (powerLog.length > 150) powerLog.shift();
             live.kw = kw; live.kwT = now;
             push(trace, TRACE_S, kw);
             learnBaseline(kw, now);
@@ -789,6 +797,36 @@ mgu.run({
         let page = 0;
         ui.onClick('BTN_PAGE', () => { touched(); page = (page + 1) % pages().length; return render(); });
         ui.onClick('BTN_PREV', () => { touched(); const n = pages().length; page = (page + n - 1) % n; return render(); });
+
+        /* ---------- Logs: the fast-kW diagnosis as QR codes to photograph (and a file on a USB stick) ---------- */
+        const PER_PAGE = 3;
+        let logView = null;   // { codes, page, saved, bytes }
+        function logBundle() {
+            const ff = fast.fit, rr = readRate(), nt = needleLog.map((x) => x[0]);
+            const deltas = nt.slice(1).map((t, i) => t - nt[i]);
+            return logs.bundle('eDrive Live ' + ((ctx.spec && ctx.spec.version) || ''), [
+                ['perf', 'power reads ' + (rr ? rr.hz.toFixed(2) + '/s, ' + Math.round(rr.ms) + ' ms each' : 'n/a') + '; baseline ' + G.fmt(baseline(), 2) + ' kW (' + (st.baseN || 0) + ' samples); powerSign ' + cfg.powerSign],
+                ['fast fit', 'a ' + G.fmt(ff.a, 3) + ' b ' + G.fmt(ff.b, 3) + ' c ' + G.fmt(ff.c, 3) + '; ' + ff.n + ' fits; err ' + G.fmt(ff.err, 2) + ' kW; electric ' + fast.electric + '; engineOn ' + engineOn()],
+                ['needle', 'buffered ' + needleLog.length + '; last ' + (live.needleT ? (Date.now() - live.needleT) + ' ms ago ' + live.needleD + '/' + live.needleR + '%' : 'never') + '; inter-arrival ms = ' + deltas.join(',')],
+                ['needle samples t,drive,recup', needleLog.map((x) => x.join(',')).join(' ')],
+                ['power samples t,raw,fast', powerLog.map((x) => x[0] + ',' + x[1] + ',' + (x[2] === null ? '-' : x[2])).join(' ')],
+                ['cluster-render log', logs.tail(logs.RENDER_LOG, 25)],
+            ]);
+        }
+        ui.onClick('BTN_LOGS', () => {
+            touched();
+            if (!logView) {
+                const text = logBundle();
+                const saved = logs.save(text, ctx.dataDir, 'edrive-logs-' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt');
+                saved.forEach((r) => log.info('logs: ' + (r.file ? 'saved ' + r.file : r.dir + ': ' + r.error)));
+                const c = logs.codes(text);
+                logView = { codes: c.codes, page: 0, saved: saved, bytes: c.bytes };
+            } else {
+                logView.page++;
+                if (logView.page * PER_PAGE >= logView.codes.length) logView = null;
+            }
+            return render();
+        });
         // a tap on a header tab (renderer that routes touch): go straight to that page
         if (ctx.onTab) ctx.onTab((i) => { touched(); const n = pages().length; page = i >= 0 && i < n ? i : page; return render(); });
         ui.onClick('BTN_RESET', () => {
@@ -1193,6 +1231,18 @@ mgu.run({
             lastDrawT = Date.now();
             const t = ctx.theme(), d = data();
             const cv = ctx.canvas(W, H).clear(t.bg);
+            if (logView) {
+                const n = logView.codes.length, npages = Math.ceil(n / PER_PAGE), first = logView.page * PER_PAGE;
+                const usb = logView.saved.filter((r) => r.file && !/exports/.test(r.file));
+                cv.text('Logs: photograph each code (page ' + (logView.page + 1) + ' of ' + npages + ', codes ' + (first + 1) + '-' + Math.min(n, first + PER_PAGE) + ' of ' + n + '), then press Logs again for the next', 40, 34, 20, t.text, { font: 'bold', literal: true });
+                cv.text(usb.length ? 'Also saved to USB: ' + usb[0].file : 'Plug in a USB stick and press Logs from the start for the full text as a file', 40, 62, 16, t.dim, { font: 'label', literal: true });
+                logView.codes.slice(first, first + PER_PAGE).forEach((q, i) => {
+                    const px = Math.max(3, Math.floor(420 / (q.size + 8)));
+                    logs.draw(cv, q, 40 + i * 520, 92, px);
+                    cv.text(String(first + i + 1) + ' / ' + n, 40 + i * 520 + 180, 92 + (q.size + 8) * px + 22, 18, t.text, { font: 'bold', literal: true });
+                });
+                return ui.image('MAIN_GFX', cv);
+            }
             const pg = pages();
             if (page >= pg.length) page = 0;
             ({ power: renderPower, battery: renderBattery, cells: renderCells, climate: renderClimate, diag: renderDiag, scan: renderScan, signals: renderSignals })[pg[page]](cv, t, d);
