@@ -17,7 +17,7 @@ import json, os, re, shutil, sys, tarfile, tempfile, uuid
 from xml.sax.saxutils import escape
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pack_data  # noqa: E402
-from localize import unicode_resources, localize_spec, load_locale, languages, zh_credit
+from localize import unicode_resources, localize_spec, load_locale, languages, credit, credit_name
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -119,13 +119,15 @@ def hmi_text(s):
 
 def setting_options(s):
     """(values, labels) of a choice / number setting, in order - the drop-down's rows.
-    "markDefault": true adds " (default)" to the default's row."""
+    "markDefault": true adds " (default)" to the default's row; "labels": {"0": "Auto"} names
+    single number values (shown as is, no unit)."""
     if s['type'] == 'choice':
         values, labels = [o[0] for o in s['options']], [o[1] for o in s['options']]
     else:
         steps = s.get('steps') or []
         unit = (' ' + s['unit']) if s.get('unit') else ''
-        values, labels = list(steps), [('%g' % v) + unit for v in steps]
+        named = s.get('labels') or {}
+        values, labels = list(steps), [named.get('%g' % v, ('%g' % v) + unit) for v in steps]
     if s.get('markDefault'):
         labels = [lb + ' (default)' if v == s.get('default') else lb for v, lb in zip(values, labels)]
     return values, labels
@@ -209,11 +211,12 @@ def build_ui(spec, language='en'):
                 strings[sid(app, 'SET_' + s['key'])] = s['label']
                 items.append(comp('tworow', name, rows=[{'Text1stRow': {'value': s['label'], 'type': 'Text'},
                                                         'Text2ndRow': {'value': '', 'type': 'Text'}}]))
-        # Chinese builds only: credit for the Chinese translation (localize.py sets the Chinese title)
-        if language == 'zh-CN':
-            credit_title, credit_link = sid(app, 'CN_CREDITS_TITLE'), sid(app, 'CN_CREDITS_LINK')
-            strings[credit_title], strings[credit_link] = zh_credit()['settingsTitle'], zh_credit()['settingsLink']
-            items.append(comp('tworow', 'CN_CREDITS', rows=[{
+        # Translated builds with a credit file only: credit for the translation (localize.py keeps its title)
+        if credit(language):
+            name = credit_name(language)
+            credit_title, credit_link = sid(app, name + '_TITLE'), sid(app, name + '_LINK')
+            strings[credit_title], strings[credit_link] = credit(language)['settingsTitle'], credit(language)['settingsLink']
+            items.append(comp('tworow', name, rows=[{
                 'Text1stRow': {'value': credit_title, 'type': 'StringId'},
                 'Text2ndRow': {'value': credit_link, 'type': 'StringId'},
             }]))
@@ -433,10 +436,11 @@ def build(app_id, language='en'):
             shutil.copy(os.path.join(adir, f), os.path.join(src, 'javascript', f))
             print('  %s (committed)' % f)
     # kit runtime
-    if app_id == 'dtc_scanner' and language == 'zh-CN':
-        from build_diagnostic_zh import catalog
+    if app_id == 'dtc_scanner' and language in ('zh-CN', 'ru'):
+        module = 'build_diagnostic_zh' if language == 'zh-CN' else 'build_diagnostic_ru'
+        catalog = __import__(module).catalog
         with tempfile.TemporaryDirectory(prefix='mgu-diagnostic-') as temporary:
-            data = os.path.join(temporary, 'zh-CN.json')
+            data = os.path.join(temporary, language + '.json')
             with open(data, 'w', encoding='utf-8', newline='\n') as file:
                 json.dump(catalog(), file, ensure_ascii=False, separators=(',', ':'))
             pack_data.pack(temporary, os.path.join(src, 'javascript', 'diagnostic_i18n.pack'))
@@ -447,24 +451,33 @@ def build(app_id, language='en'):
             shutil.copytree(p, os.path.join(src, 'javascript', 'kit', f))
         else:
             shutil.copy(p, os.path.join(src, 'javascript', 'kit', f))
+    if language != 'ru':
+        for name in ('ru.json', 'ru.tsv'):
+            p = os.path.join(src, 'javascript', 'kit', 'locales', name)
+            if os.path.exists(p):
+                os.remove(p)
+    if language == 'ru':
+        shutil.copy(os.path.join(KIT, 'localization', 'fonts', 'cyrillic-ru.json'),
+                    os.path.join(src, 'javascript', 'kit', 'fonts', 'cyrillic.json'))
     if language == 'zh-CN':
         # Diagnostic glyphs are Chinese-only; keep the English runtime atlas intact.
         if app_id == 'dtc_scanner':
             shutil.copy(os.path.join(KIT, 'localization', 'fonts', 'diagnostic-zh-CN.json'),
                         os.path.join(src, 'javascript', 'kit', 'fonts', 'cjk.json'))
-        # The translation credit in the installed Chinese entry code, as plain comments.
+    if credit(language):
+        # The translation credit in the installed entry code, as plain comments.
         entry = os.path.join(src, 'javascript', 'app.js')
-        credit = ''.join('// %s\n' % line for line in zh_credit()['comment'])
+        comment = ''.join('// %s\n' % line for line in credit(language)['comment'])
         with open(entry, 'rb') as file:
             body = file.read()
         with open(entry, 'wb') as file:
-            file.write(credit.encode('utf-8') + body)
+            file.write(comment.encode('utf-8') + body)
     rt_spec = {k: spec.get(k) for k in ('id', 'title', 'version', 'screens', 'settings', 'config', 'startWidget')}
     rt_spec['stateIds'] = state_ids
     json.dump(rt_spec, open(os.path.join(src, 'javascript', 'kit', 'app-spec.json'), 'w', encoding='utf-8', newline='\n'), indent=1)
     locale = {'language': language, 'strings': load_locale(language)}
-    if language == 'zh-CN':
-        locale['credit'] = zh_credit()['corner']
+    if credit(language):
+        locale['credit'] = credit(language)['corner']
     json.dump(locale, open(os.path.join(src, 'javascript', 'kit', 'locale.json'), 'w', encoding='utf-8', newline='\n'), ensure_ascii=False)
     shutil.copy(os.path.join(SDK, 'index.js'), os.path.join(src, 'node_modules', 'oap-sdk', 'index.js'))
     shutil.copy(os.path.join(SDK, 'package.json'), os.path.join(src, 'node_modules', 'oap-sdk', 'package.json'))
